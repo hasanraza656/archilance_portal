@@ -39,8 +39,6 @@ Route::get('/test-email', function () {
     }
 });
 
-
-
 Route::get('/onedrive-image', function (Request $request) {
 
     $path = $request->query('path');
@@ -66,8 +64,24 @@ Route::get('/onedrive-image', function (Request $request) {
         return response($contents)
             ->header('Content-Type', $mime);
 
-    } catch (\Exception $e) {
-        return response("Failed to fetch file: " . $e->getMessage(), 500);
+    } catch (\Throwable $e) {
+        // \Throwable, not \Exception: a PHP Error (bad method call, memory
+        // exhaustion, type error) is NOT an Exception, so it escaped this
+        // block and surfaced as Symfony's generic 500 page instead of the
+        // message below — which is exactly what made this hard to diagnose.
+        \Log::error('onedrive-image failed', [
+            'path'  => $path,
+            'error' => $e->getMessage(),
+            'class' => get_class($e),
+            'file'  => $e->getFile() . ':' . $e->getLine(),
+        ]);
+
+        return response()->json([
+            'error' => 'Failed to fetch file',
+            'type'  => get_class($e),
+            'message' => $e->getMessage(),
+            'at' => basename($e->getFile()) . ':' . $e->getLine(),
+        ], 500);
     }
 
 });

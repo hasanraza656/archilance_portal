@@ -107,13 +107,43 @@ class OneDriveService
     }
     
     
+    /**
+     * File metadata only (name, size) — a few hundred bytes, unlike
+     * streamFile() which buffers the whole file. Lets a caller check that a
+     * file exists and how big it is before committing memory to it.
+     */
+    public function fileMetadata(string $path): array
+    {
+        $response = Http::withToken($this->accessToken)
+            ->timeout(20)
+            ->get("https://graph.microsoft.com/v1.0/me/drive/root:/{$path}");
+
+        return [
+            'ok'      => $response->successful(),
+            'status'  => $response->status(),
+            'name'    => $response->json('name'),
+            'size'    => $response->json('size'),
+            'error'   => $response->failed() ? $response->json('error.message') : null,
+        ];
+    }
+
     public function streamFile(string $path)
     {
-        // 1. Get temporary download URL
         $response = Http::withToken($this->accessToken)
+            ->timeout(30)
             ->get("https://graph.microsoft.com/v1.0/me/drive/root:/{$path}:/content");
-    
-        // 2. Return raw body
+
+        // Graph returns JSON on failure (401 expired token, 404 missing file).
+        // Without this check that error body was handed back as if it were
+        // image bytes, so the browser just showed a broken image and the real
+        // reason never surfaced anywhere.
+        if ($response->failed()) {
+            $detail = $response->json('error.message') ?? $response->body();
+            throw new Exception(
+                "OneDrive returned {$response->status()} for {$path}: " . mb_substr((string) $detail, 0, 300)
+            );
+        }
+
         return $response->body();
     }
 

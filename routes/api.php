@@ -16,6 +16,7 @@ use App\Http\Controllers\API\admin\TaskCommentController;
 use App\Http\Controllers\API\admin\UserManagementController;
 use App\Http\Controllers\API\admin\ProjectBriefController;
 use App\Http\Controllers\API\admin\WorkSessionController;
+use App\Http\Controllers\API\admin\SummaryController;
 use App\Http\Controllers\API\ChatController;
 use App\Http\Controllers\API\SubscriptionController;
 use App\Http\Controllers\API\SlackController;
@@ -247,6 +248,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/payslip/{payslipId}/pay', [App\Http\Controllers\API\admin\PayrollController::class, 'markPaid']);
         Route::post('/payslip/{payslipId}/unpay', [App\Http\Controllers\API\admin\PayrollController::class, 'unmarkPaid']);
 
+        /*
+         | Summary / reports page — company-wide hours, workload, task-status and
+         | leave aggregates for one shared date range. Admin-only (role:2, this
+         | block's middleware) for now.
+         */
+        Route::get('/summary', [SummaryController::class, 'index']);
+        Route::get('/summary/employee/{employeeId}/average', [SummaryController::class, 'employeeAverage']);
+
     });
 
 
@@ -317,6 +326,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
     Route::prefix('employee')->middleware('role:3')->group(function () {
+
+        /*
+         | Average hours/day for the employee's OWN work diary.
+         |
+         | Plain role:3 on purpose — NOT inside any employeeType group. Every
+         | employee needs their own average; the controller rejects a request
+         | for anyone else's id unless the caller is an admin or executive,
+         | so widening the route doesn't widen what anyone can see.
+         */
+        Route::get('/summary/employee/{employeeId}/average', [SummaryController::class, 'employeeAverage']);
+
 
         Route::post('/pin-task-comment', [TaskCommentController::class, 'pinComment']);
         Route::post('/unpin-task-comment', [TaskCommentController::class, 'unpinComment']);
@@ -410,6 +430,23 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::middleware('employeeType:Executive')->group(function () {
             Route::post('/session-heartbeat', [App\Http\Controllers\API\employee\WorkSessionController::class, 'sessionHeartBeat']);
+
+            /*
+             | Summary / reports for Executives. Same controller as the admin
+             | routes — executives are user_role = 3, so they can only reach
+             | it through the `employee` prefix (see the payroll note below).
+             */
+            Route::get('/summary', [SummaryController::class, 'index']);
+
+            /*
+             | NOTE: /summary/employee/{id}/average is deliberately NOT
+             | registered here. It already exists under the plain role:3
+             | group above, and Laravel matches the FIRST registration for a
+             | URI — so a copy here would shadow it and apply
+             | employeeType:Executive to every employee, 403-ing anyone who
+             | isn't an executive. Executives are role:3, so the route above
+             | already covers them.
+             */
 
             /*
              | Payroll & Salaries for Executives.
