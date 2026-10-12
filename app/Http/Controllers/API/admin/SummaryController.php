@@ -73,7 +73,7 @@ class SummaryController extends Controller
      * guaranteeing the headline totals and the per-person lists agree with
      * each other.
      */
-    private function excludedUserIds(): array
+    public function excludedUserIds(): array
     {
         static $cached = null;
         if ($cached !== null) {

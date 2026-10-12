@@ -115,6 +115,7 @@ class LeavePolicy
     public const ANNUAL_SPLIT_GAP_DAYS    = 7;
 
     public const BIM_TEAM            = 'BIM Team';
+    public const GBB_TEAM            = 'GBB Team'; // same entitlements as BIM (Additional pool, 18 Casual)
     public const OUTSOURCE_TEAM      = 'outsource department';
     public const OUTSOURCE_TYPE      = 'outsource';
     public const INTERNEE_TYPE       = 'internee';
@@ -248,7 +249,15 @@ class LeavePolicy
 
     public function isBimTeam(): bool
     {
-        return strcasecmp(trim((string) $this->user->employee_team), self::BIM_TEAM) === 0;
+        $team = trim((string) $this->user->employee_team);
+
+        foreach ([self::BIM_TEAM, self::GBB_TEAM] as $eligible) {
+            if (strcasecmp($team, $eligible) === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** users.gender, lowercased — '' when the column is missing or not yet set. */
@@ -729,7 +738,7 @@ class LeavePolicy
     private function validateAdditional(Carbon $start, Carbon $end, int $days, ?int $excludeId): ?string
     {
         if (!$this->isBimTeam()) {
-            return 'Additional Casual Leave (public-holiday compensation) is only available to the BIM Team.';
+            return 'Additional Casual Leave (public-holiday compensation) is only available to the BIM and GBB Teams.';
         }
 
         return $this->validateCasualStyle(self::ADDITIONAL, $start, $end, $days, $excludeId);

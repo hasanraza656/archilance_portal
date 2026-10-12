@@ -63,7 +63,7 @@ class WorkSessionController extends Controller
 
 
 
-        $sessions = $query->orderBy('created_at', 'desc')->paginate(100);
+        $sessions = $query->orderBy('created_at', 'desc')->paginate(800);
 
         $overallTotalSeconds = 0;
         $time_strings_hr = [];
@@ -319,8 +319,52 @@ class WorkSessionController extends Controller
         return response()->json(['message' => 'Work session deleted successfully.']);
     }
 
+    /**
+     * Add manual time ON BEHALF of another employee (POST .../other-manual-time).
+     *
+     * Reachable from the admin and employee route groups, so it checks WHO is
+     * asking instead of trusting the route: only admins and managers /
+     * supervisors / executives may log time for someone else — a plain employee
+     * could otherwise post any user_id here. The entry is stored as type
+     * "Manual", like an employee's own manual time, so it is labelled as such in
+     * every diary.
+     */
     public function manualSession(Request $request)
     {
+        $actor = Auth::user();
+        $mayAddForOthers = $actor && (
+            in_array((int) $actor->user_role, [2, 6, 7], true)
+            || in_array($actor->employee_type, ['Manager', 'Supervisor', 'Executive'], true)
+        );
+
+        if (!$mayAddForOthers) {
+            return response()->json(['message' => 'You are not allowed to add time for other employees.'], 403);
+        }
+
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
+            'user_id' => 'required|integer|exists:users,id',
+            'task_id' => 'required|integer|exists:project_tasks,id',
+            'start_date' => 'required|date',
+            'start_time' => 'required|date_format:H:i,H:i:s',
+            'end_date' => 'required|date',
+            'end_time' => 'required|date_format:H:i,H:i:s',
+            'memo_content' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => $validator->errors()->first(), 'errors' => $validator->errors()], 422);
+        }
+
+        $employee = User::find($request->user_id);
+        if (!$employee || (int) $employee->user_role !== 3) {
+            return response()->json(['message' => 'Time can only be added for an employee.'], 422);
+        }
+
+        $start = Carbon::parse($request->start_date . ' ' . $request->start_time);
+        $end = Carbon::parse($request->end_date . ' ' . $request->end_time);
+        if ($end->lessThanOrEqualTo($start)) {
+            return response()->json(['message' => 'End time must be after the start time.'], 422);
+        }
 
         $data = new WorkSession();
         $data->user_id = $request->user_id;
@@ -330,6 +374,7 @@ class WorkSessionController extends Controller
         $data->end_time = $request->end_time;
         $data->memo_content = $request->memo_content;
         $data->task_id = $request->task_id;
+        $data->type = 'Manual';
         $data->save();
 
         return response()->json([

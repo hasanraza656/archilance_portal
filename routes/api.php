@@ -256,6 +256,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/summary', [SummaryController::class, 'index']);
         Route::get('/summary/employee/{employeeId}/average', [SummaryController::class, 'employeeAverage']);
 
+        // Weekly employee evaluations — read-only company-wide view (filters: manager, employee, dates).
+        Route::get('/evaluations/filters', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'filters']);
+        Route::get('/evaluations', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'index']);
+
+        // Project managers: which assignees manage a first-level task (a "project" in the UI); several allowed.
+        Route::get('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'index']);
+        Route::post('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'update']);
+
+        // Monthly manager/executive ratings — admin sees every rating and who gave it.
+        Route::get('/manager-evaluations', [App\Http\Controllers\API\employee\ManagerEvaluationController::class, 'adminIndex']);
+
     });
 
 
@@ -522,6 +533,29 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/my-internees', [App\Http\Controllers\API\employee\InterneeRatingController::class, 'myInternees']);
         Route::get('/internee-rating-pending-check', [App\Http\Controllers\API\employee\InterneeRatingController::class, 'pendingCheck']);
         Route::resource('/internee-rating', App\Http\Controllers\API\employee\InterneeRatingController::class);
+
+        // Weekly employee evaluations (reporting manager grades their team, per project).
+        // Fixed paths only (no {id} route exists for this resource), so nothing can shadow them.
+        Route::get('/evaluations/pending', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'pending']);
+        Route::get('/evaluations/reportees', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'reportees']);
+        Route::get('/evaluations/filters', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'filters']);
+        Route::get('/evaluations', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'index']);
+        Route::post('/evaluations', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'store']);
+
+        // Tracker "week pulse" banner data (self only).
+        Route::get('/work-pulse', [App\Http\Controllers\API\employee\WorkPulseController::class, 'show']);
+
+        // Home dashboard: month leaderboard, team, team leaves, evaluations (read-only).
+        Route::get('/home-stats', [App\Http\Controllers\API\employee\HomeStatsController::class, 'show']);
+
+        // Project managers of a first-level task (read for everyone; set by admin/executive — enforced in the controller).
+        Route::get('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'index']);
+        Route::post('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'update']);
+
+        // Monthly manager/executive ratings: what I owe, submit, and my own (anonymous) result.
+        Route::get('/manager-evaluations/pending', [App\Http\Controllers\API\employee\ManagerEvaluationController::class, 'pending']);
+        Route::get('/manager-evaluations/my-score', [App\Http\Controllers\API\employee\ManagerEvaluationController::class, 'myScore']);
+        Route::post('/manager-evaluations', [App\Http\Controllers\API\employee\ManagerEvaluationController::class, 'store']);
 
     });
 
