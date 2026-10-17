@@ -10,28 +10,103 @@ use Illuminate\Console\Command;
 
 /**
  * Emails each employee a single digest of their tasks whose due date is
- * approaching (or overdue) and that are not yet completed. Idempotent: a task
- * is only included once per day per user (tracked via an in-app reminder row),
- * so it's safe even if the scheduler runs it more than once.
+ * approaching (or only just overdue) and that still need THEIR action.
+ * Idempotent: a task is only included once per day per user (tracked via an
+ * in-app reminder row), so it's safe even if the scheduler runs it more than once.
+ *
+ * What is deliberately left out (these used to be emailed every single morning,
+ * forever, which is why people stopped trusting the digest):
+ *  - tasks overdue by more than --overdue-days (default 7): after that they are
+ *    abandoned or stale data, not something a daily nudge will fix;
+ *  - tasks whose ball is not in the employee's court: Completed / Done,
+ *    Client Review, On Hold, Awaiting Info (and cancelled / closed);
+ *  - sub-tasks that sit under a first-level task which is already Completed;
+ *  - tasks of a job (DB "project") that is Completed or On Hold.
  */
 class DueDateReminders extends Command
 {
-    protected $signature = 'notify:due-reminders {--days=2}';
+    protected $signature = 'notify:due-reminders {--days=2} {--overdue-days=7}';
     protected $description = 'Email employees a digest of their tasks with an approaching due date.';
+
+    /** Statuses where the next move belongs to someone else (or there is no next move). */
+    private const QUIET_TASK_STATUSES = ['completed', 'done', 'client review', 'on hold', 'awaiting info', 'cancelled', 'canceled', 'closed'];
+
+    /** Job (DB "project") statuses whose tasks are not nagged about. */
+    private const QUIET_JOB_STATUSES = ['completed', 'on hold', 'cancelled', 'canceled', 'closed'];
+
+    private function isQuiet(?string $status, array $list): bool
+    {
+        return in_array(strtolower(trim((string) $status)), $list, true);
+    }
+
+    /**
+     * Tasks that deserve a reminder today: due within the next $days days, or overdue by at
+     * most $overdueDays, still actionable, with an assignee list loaded.
+     */
+    public function eligibleTasks(Carbon $today, int $days = 2, int $overdueDays = 7)
+    {
+        $limit = $today->copy()->addDays($days);
+        $from  = $today->copy()->subDays($overdueDays);
+
+        $tasks = ProjectTask::query()
+            ->whereNotNull('due_date')
+            ->whereDate('due_date', '>=', $from)
+            ->whereDate('due_date', '<=', $limit)
+            ->with(['assignees.user', 'project'])
+            ->get()
+            ->filter(fn ($t) => !$this->isQuiet($t->task_status, self::QUIET_TASK_STATUSES))
+            ->filter(fn ($t) => !$this->isQuiet(optional($t->project)->status, self::QUIET_JOB_STATUSES));
+
+        if ($tasks->isEmpty()) {
+            return $tasks->values();
+        }
+
+        // Sub-tasks of a first-level task that is already Completed are done in practice.
+        $completedAncestors = $this->completedAncestorMap($tasks);
+
+        return $tasks->reject(fn ($t) => isset($completedAncestors[$t->id]))->values();
+    }
+
+    /** @return array<int, true> ids of the given tasks that have a Completed/Done ancestor */
+    private function completedAncestorMap($tasks): array
+    {
+        $parents = []; // id => [parent_task_id, status]
+        $need    = $tasks->pluck('parent_task_id')->filter()->unique()->values()->all();
+
+        for ($round = 0; $round < 12 && !empty($need); $round++) {
+            $next = [];
+            foreach (ProjectTask::whereIn('id', $need)->get(['id', 'parent_task_id', 'task_status']) as $p) {
+                $parents[$p->id] = [$p->parent_task_id, $p->task_status];
+                if ($p->parent_task_id && !isset($parents[$p->parent_task_id])) {
+                    $next[$p->parent_task_id] = $p->parent_task_id;
+                }
+            }
+            $need = array_values($next);
+        }
+
+        $out = [];
+        foreach ($tasks as $t) {
+            $cur   = $t->parent_task_id;
+            $guard = 0;
+            while ($cur && isset($parents[$cur]) && $guard++ < 12) {
+                if (in_array(strtolower(trim((string) $parents[$cur][1])), ['completed', 'done'], true)) {
+                    $out[$t->id] = true;
+                    break;
+                }
+                $cur = $parents[$cur][0];
+            }
+        }
+
+        return $out;
+    }
 
     public function handle()
     {
-        $days  = max(0, (int) $this->option('days'));
-        $today = Carbon::today();
-        $limit = $today->copy()->addDays($days);
+        $days        = max(0, (int) $this->option('days'));
+        $overdueDays = max(0, (int) $this->option('overdue-days'));
+        $today       = Carbon::today();
 
-        // Tasks due on/before the window end, not completed, that have a due date.
-        $tasks = ProjectTask::query()
-            ->whereNotNull('due_date')
-            ->whereDate('due_date', '<=', $limit)
-            ->whereNotIn('task_status', ['Completed', 'Done'])
-            ->with(['assignees.user', 'project'])
-            ->get();
+        $tasks = $this->eligibleTasks($today, $days, $overdueDays);
 
         // Group by employee (skip customers and users without an email).
         $byEmployee = [];

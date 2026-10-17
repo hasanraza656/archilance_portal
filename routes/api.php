@@ -260,6 +260,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/evaluations/filters', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'filters']);
         Route::get('/evaluations', [App\Http\Controllers\API\employee\EmployeeEvaluationController::class, 'index']);
 
+        // Org chart (admins + executives only - enforced in the controller).
+        Route::get('/org-chart/people', [App\Http\Controllers\API\OrgChartController::class, 'people']);
+        Route::get('/org-chart/photo/{id}', [App\Http\Controllers\API\OrgChartController::class, 'photo']);
+        Route::get('/org-charts', [App\Http\Controllers\API\OrgChartController::class, 'index']);
+        Route::post('/org-charts', [App\Http\Controllers\API\OrgChartController::class, 'store']);
+        Route::get('/org-charts/{id}', [App\Http\Controllers\API\OrgChartController::class, 'show']);
+        Route::delete('/org-charts/{id}', [App\Http\Controllers\API\OrgChartController::class, 'destroy']);
+
         // Project managers: which assignees manage a first-level task (a "project" in the UI); several allowed.
         Route::get('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'index']);
         Route::post('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'update']);
@@ -547,6 +555,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Home dashboard: month leaderboard, team, team leaves, evaluations (read-only).
         Route::get('/home-stats', [App\Http\Controllers\API\employee\HomeStatsController::class, 'show']);
+
+        // Org chart (admins + executives only - enforced in the controller).
+        Route::get('/org-chart/people', [App\Http\Controllers\API\OrgChartController::class, 'people']);
+        Route::get('/org-chart/photo/{id}', [App\Http\Controllers\API\OrgChartController::class, 'photo']);
+        Route::get('/org-charts', [App\Http\Controllers\API\OrgChartController::class, 'index']);
+        Route::post('/org-charts', [App\Http\Controllers\API\OrgChartController::class, 'store']);
+        Route::get('/org-charts/{id}', [App\Http\Controllers\API\OrgChartController::class, 'show']);
+        Route::delete('/org-charts/{id}', [App\Http\Controllers\API\OrgChartController::class, 'destroy']);
 
         // Project managers of a first-level task (read for everyone; set by admin/executive — enforced in the controller).
         Route::get('/task-managers', [App\Http\Controllers\API\employee\TaskManagerController::class, 'index']);

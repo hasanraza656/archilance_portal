@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\employee;
 use App\Http\Controllers\Controller;
 use App\Traits\CalculatesIdleTime;
 use App\Traits\AnnotatesTaskUrgency;
+use App\Traits\ResolvesTaskTree;
 use Illuminate\Http\Request;
 use App\Models\Project;
 use App\Models\ProjectTask;
@@ -17,7 +18,7 @@ use App\Models\User;
 
 class ProjectController extends Controller
 {
-    use AnnotatesTaskUrgency, CalculatesIdleTime;
+    use AnnotatesTaskUrgency, CalculatesIdleTime, ResolvesTaskTree;
 
     public function index(Request $request)
     {
@@ -585,15 +586,15 @@ class ProjectController extends Controller
             }
         }
 
-        // Roll up child task hours into their parent
+        // Roll every task's hours up to its FIRST-LEVEL task, however deep it sits. (This used to
+        // add a task only to its direct parent, so a sub-sub-task's time never reached the top.)
+        $rootOf = $this->rootTaskMap(
+            $project->allTasks->mapWithKeys(fn ($t) => [(int) $t->id => $t->parent_task_id ? (int) $t->parent_task_id : null])->all()
+        );
         $rolledUpHours = [];
         foreach ($project->allTasks as $task) {
-            $hours = $taskHours[$task->id] ?? 0;
-            if ($task->parent_task_id) {
-                $rolledUpHours[$task->parent_task_id] = ($rolledUpHours[$task->parent_task_id] ?? 0) + $hours;
-            } else {
-                $rolledUpHours[$task->id] = ($rolledUpHours[$task->id] ?? 0) + $hours;
-            }
+            $root = $rootOf[(int) $task->id] ?? (int) $task->id;
+            $rolledUpHours[$root] = ($rolledUpHours[$root] ?? 0) + ($taskHours[$task->id] ?? 0);
         }
 
         $parentTasksWithHours = [];

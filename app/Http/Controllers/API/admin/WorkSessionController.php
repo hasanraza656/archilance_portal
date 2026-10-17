@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\WorkSession;
 use App\Models\TrackWindow;
 use App\Traits\BuildsWindowActivity;
+use App\Traits\ResolvesTaskTree;
 use Auth;
 use Carbon\Carbon;
 use Carbon\CarbonInterval;
@@ -17,6 +18,7 @@ use Illuminate\Support\Facades\DB;
 class WorkSessionController extends Controller
 {
     use BuildsWindowActivity;
+    use ResolvesTaskTree;
 
 
    public function index(Request $request)
@@ -52,7 +54,9 @@ class WorkSessionController extends Controller
         
         // ✅ Extra filters for task_id / project_id
         if ($request->filled('task_id')) {
-            $query->where('task_id', $request->task_id);
+            // A task filter covers the task AND everything nested under it, so a parent's
+            // diary shows the time logged on its sub-tasks too (same rule as Time logged).
+            $query->whereIn('task_id', $this->taskTreeIds((int) $request->task_id));
         }
         
         if ($request->filled('project_id')) {

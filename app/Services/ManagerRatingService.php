@@ -159,7 +159,13 @@ class ManagerRatingService
         }
 
         // Org chart: executive <-> managers of the same team; managers <-> managers.
+        // Same hours rule as the team ratings: only when the two actually worked together for
+        // more than 10 h in the period — time one tracked on projects the other manages, in
+        // either direction. Without it, people who never shared any work were being asked to
+        // rate each other just because they sit on the same team.
         if ($team !== null && in_array($type, ['Manager', 'Executive'], true)) {
+            $together = $this->workedTogether($rater, $monthStart);
+
             $sameTeam = User::where('user_role', 3)
                 ->whereIn('employee_type', ['Manager', 'Executive'])
                 ->where('id', '!=', $rater->id)
@@ -171,12 +177,17 @@ class ManagerRatingService
                     continue;
                 }
 
+                $seconds = (int) ($together[(int) $other->id] ?? 0);
+                if ($seconds <= ProjectManagerHours::PERIOD_MIN_SECONDS) {
+                    continue;
+                }
+
                 if ($type === 'Executive' && $other->employee_type === 'Manager') {
-                    $out[(int) $other->id] = ['kind' => Q::EXEC_TO_MANAGER, 'seconds' => 0];
+                    $out[(int) $other->id] = ['kind' => Q::EXEC_TO_MANAGER, 'seconds' => $seconds];
                 } elseif ($type === 'Manager' && $other->employee_type === 'Executive') {
-                    $out[(int) $other->id] = ['kind' => Q::MANAGER_TO_EXEC, 'seconds' => 0];
+                    $out[(int) $other->id] = ['kind' => Q::MANAGER_TO_EXEC, 'seconds' => $seconds];
                 } elseif ($type === 'Manager' && $other->employee_type === 'Manager') {
-                    $out[(int) $other->id] = ['kind' => Q::PEER, 'seconds' => 0];
+                    $out[(int) $other->id] = ['kind' => Q::PEER, 'seconds' => $seconds];
                 }
             }
         }
@@ -184,6 +195,31 @@ class ManagerRatingService
         // Never rate a test/ignored account.
         foreach (self::IGNORED_USER_IDS as $id) {
             unset($out[$id]);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Seconds $rater and each other person spent working together in the period: time $rater
+     * tracked on projects that person manages, plus time that person tracked on projects
+     * $rater manages. Uses the same rollout fallback as the weekly rating: work on a project
+     * that has no manager yet counts for the person's reporting manager, so this works while
+     * project managers are still being filled in (and fades out on its own as they are set).
+     *
+     * @return array<int, int> other user id => seconds
+     */
+    private function workedTogether(User $rater, Carbon $monthStart): array
+    {
+        $credits = app(ProjectManagerHours::class)->credits($monthStart, $this->periodEnd($monthStart), 'all', true);
+
+        $out = [];
+        foreach ($credits as $c) {
+            if ((int) $c['employee_id'] === (int) $rater->id) {
+                $out[(int) $c['manager_id']] = ($out[(int) $c['manager_id']] ?? 0) + $c['seconds'];
+            } elseif ((int) $c['manager_id'] === (int) $rater->id) {
+                $out[(int) $c['employee_id']] = ($out[(int) $c['employee_id']] ?? 0) + $c['seconds'];
+            }
         }
 
         return $out;

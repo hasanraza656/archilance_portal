@@ -278,7 +278,8 @@ class SummaryController extends Controller
         }
 
         $employeeIds = array_keys($employeeSeconds);
-        $employees = User::whereIn('id', $employeeIds)->get(['id', 'name', 'profile_pic', 'employee_type'])->keyBy('id');
+        // withTrashed(): a deleted employee's tracked hours still belong in the report, under their real name.
+        $employees = User::withTrashed()->whereIn('id', $employeeIds)->get(['id', 'name', 'profile_pic', 'employee_type'])->keyBy('id');
 
         // Approved leave days per employee that overlap [from, to] — these
         // days are EXCLUDED from the average-per-day denominator below, so a

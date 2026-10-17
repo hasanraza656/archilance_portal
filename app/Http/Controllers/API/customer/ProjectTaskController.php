@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API\customer;
 
 use App\Http\Controllers\Controller;
 use App\Traits\CalculatesIdleTime;
+use App\Traits\ResolvesTaskTree;
 use Illuminate\Http\Request;
 
 use App\Models\ProjectTask;
@@ -15,7 +16,7 @@ use App\Models\WorkSession;
 
 class ProjectTaskController extends Controller
 {
-    use CalculatesIdleTime;
+    use CalculatesIdleTime, ResolvesTaskTree;
 
     public function index(Request $request)
     {
@@ -27,11 +28,11 @@ class ProjectTaskController extends Controller
 
         $tasks = $query->whereNull('parent_task_id')->get();
 
-        // Attach each task's own logged hours (this task's sessions only, not
-        // its children's) so the customer portal can show a duration next to
-        // every row without a second round-trip per task.
+        // Attach each task's logged hours — its own sessions plus those of all its
+        // sub-tasks — so the customer portal can show a duration next to every row
+        // without a second round-trip per task.
         foreach ($tasks as $task) {
-            $seconds = $this->calculateTaskTotalHours($task->id);
+            $seconds = $this->calculateTaskTotalHours($this->taskTreeIds((int) $task->id));
             $task->total_hours = $seconds;
             $task->total_hours_formatted = $this->formatHours($seconds);
         }
@@ -56,19 +57,30 @@ class ProjectTaskController extends Controller
         ])->findOrFail($id);
 
         // Calculate working hours for each assignee
+        // A parent task's time includes everything logged on its sub-tasks, at any depth.
+        $treeIds = $this->taskTreeIds((int) $task->id);
+        $assignedInTree = \App\Models\TaskAssignee::whereIn('task_id', $treeIds)
+            ->pluck('employee_id')->map(fn ($v) => (int) $v)->unique()->all();
+
         $assigneesWithHours = [];
         $seenEmployeeIds = [];
+        // Soft-deleted accounts are still real people with real hours: look them up
+        // too, so their name shows instead of "Unknown".
+        $trashedAssigneeUsers = \App\Models\User::onlyTrashed()
+            ->whereIn('id', $task->assignees->pluck('employee_id')->all())
+            ->get()
+            ->keyBy('id');
 
         foreach ($task->assignees as $assignee) {
             $employeeId = $assignee->employee_id;
             $seenEmployeeIds[] = (int) $employeeId;
 
             // Calculate total working hours for this employee on this task
-            $totalHours = $this->calculateEmployeeTaskHours($employeeId, $task->id);
+            $totalHours = $this->calculateEmployeeTaskHours($employeeId, $treeIds);
 
             $assigneesWithHours[] = [
                 'assignee' => $assignee,
-                'user' => $assignee->user,
+                'user' => $assignee->user ?? $trashedAssigneeUsers->get((int) $assignee->employee_id),
                 'total_working_hours' => $totalHours,
                 'total_working_hours_formatted' => $this->formatHours($totalHours)
             ];
@@ -79,7 +91,7 @@ class ProjectTaskController extends Controller
         // NOW, so their hours silently vanished from this breakdown even though
         // calculateTaskTotalHours() (this task's TOTAL, below) sums every session
         // on this task_id regardless of current assignment.
-        $loggedEmployeeIds = WorkSession::where('task_id', $task->id)
+        $loggedEmployeeIds = WorkSession::whereIn('task_id', $treeIds)
             ->distinct()
             ->pluck('user_id')
             ->map(fn ($id) => (int) $id)
@@ -94,7 +106,7 @@ class ProjectTaskController extends Controller
             $formerUsers = \App\Models\User::withTrashed()->whereIn('id', $formerEmployeeIds)->get()->keyBy('id');
 
             foreach ($formerEmployeeIds as $employeeId) {
-                $totalHours = $this->calculateEmployeeTaskHours($employeeId, $task->id);
+                $totalHours = $this->calculateEmployeeTaskHours($employeeId, $treeIds);
 
                 if ($totalHours <= 0) {
                     continue; // nothing meaningful to show
@@ -105,7 +117,7 @@ class ProjectTaskController extends Controller
                     'user' => $formerUsers->get($employeeId),
                     'total_working_hours' => $totalHours,
                     'total_working_hours_formatted' => $this->formatHours($totalHours),
-                    'removed_from_task' => true,
+                    'removed_from_task' => !in_array((int) $employeeId, $assignedInTree, true),
                 ];
             }
         }
@@ -116,12 +128,12 @@ class ProjectTaskController extends Controller
         // This task's own hours, plus each of its subtasks' own hours — lets
         // the customer portal show a duration on every row when a parent task
         // is expanded, computed here so no extra request is needed per row.
-        $ownSeconds = $this->calculateTaskTotalHours($task->id);
+        $ownSeconds = $this->calculateTaskTotalHours($treeIds);
         $task->total_hours = $ownSeconds;
         $task->total_hours_formatted = $this->formatHours($ownSeconds);
 
         foreach ($task->subTasks as $subTask) {
-            $subSeconds = $this->calculateTaskTotalHours($subTask->id);
+            $subSeconds = $this->calculateTaskTotalHours($this->taskTreeIds((int) $subTask->id));
             $subTask->total_hours = $subSeconds;
             $subTask->total_hours_formatted = $this->formatHours($subSeconds);
         }
@@ -136,9 +148,9 @@ class ProjectTaskController extends Controller
      * portal shows on tasks and subtasks. Same net-of-idle math as
      * calculateEmployeeTaskHours below, just without the user_id filter.
      */
-    private function calculateTaskTotalHours($taskId)
+    private function calculateTaskTotalHours($taskIds)
     {
-        $sessions = WorkSession::where('task_id', $taskId)->get();
+        $sessions = WorkSession::whereIn('task_id', (array) $taskIds)->get();
         $totalSeconds = 0;
 
         foreach ($sessions as $session) {
@@ -174,12 +186,12 @@ class ProjectTaskController extends Controller
         return $totalSeconds;
     }
 
-     private function calculateEmployeeTaskHours($employeeId, $taskId)
+     private function calculateEmployeeTaskHours($employeeId, $taskIds)
     {
        // \Log::info("Calculating hours for employee: $employeeId, task: $taskId");
         
         $sessions = WorkSession::where('user_id', $employeeId)
-            ->where('task_id', $taskId)
+            ->whereIn('task_id', (array) $taskIds)
             ->get();
 
        // \Log::info("Found " . $sessions->count() . " work sessions");

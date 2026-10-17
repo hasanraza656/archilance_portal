@@ -5,6 +5,7 @@ namespace App\Http\Controllers\api\admin;
 use App\Http\Controllers\Controller;
 use App\Traits\CalculatesIdleTime;
 use App\Traits\AnnotatesTaskUrgency;
+use App\Traits\ResolvesTaskTree;
 
 use App\Models\ProjectTask;
 use App\Models\TaskAttachment;
@@ -24,7 +25,7 @@ use App\Helpers\helper;
 
 class ProjectTaskController extends Controller
 {
-    use AnnotatesTaskUrgency, CalculatesIdleTime;
+    use AnnotatesTaskUrgency, CalculatesIdleTime, ResolvesTaskTree;
 
     // ✅ Get all tasks (optionally filtered by project)
     public function index(Request $request)
@@ -167,7 +168,10 @@ class ProjectTaskController extends Controller
         $this->annotateUrgency(collect([$task]), $this->urgentAncestorSet($task->project_id));
 
         // 1. ONE query: all sessions for this task (across all employees)
-        $allSessions = WorkSession::where('task_id', $task->id)->get();
+        // A parent task's time includes everything logged on its sub-tasks, at any depth —
+        // otherwise a parent whose people only ever tracked on sub-tasks showed 0h.
+        $treeIds = $this->taskTreeIds((int) $task->id);
+        $allSessions = WorkSession::whereIn('task_id', $treeIds)->get();
 
         // 2. ONE query: all adjustments for those sessions
         $allSessionIds = $allSessions->pluck('id')->toArray();
@@ -183,6 +187,14 @@ class ProjectTaskController extends Controller
 
         $assigneesWithHours = [];
         $seenEmployeeIds = [];
+        $assignedInTree = \App\Models\TaskAssignee::whereIn('task_id', $treeIds)
+            ->pluck('employee_id')->map(fn ($v) => (int) $v)->unique()->all();
+        // Soft-deleted accounts are still real people with real hours: look them up
+        // too, so their name shows instead of "Unknown".
+        $trashedAssigneeUsers = \App\Models\User::onlyTrashed()
+            ->whereIn('id', $task->assignees->pluck('employee_id')->all())
+            ->get()
+            ->keyBy('id');
 
         foreach ($task->assignees as $assignee) {
             $employeeId = (int) $assignee->employee_id;
@@ -195,7 +207,7 @@ class ProjectTaskController extends Controller
 
             $assigneesWithHours[] = [
                 'assignee'                      => $assignee,
-                'user'                          => $assignee->user,
+                'user'                          => $assignee->user ?? $trashedAssigneeUsers->get((int) $assignee->employee_id),
                 'total_working_hours'           => $totalSeconds,
                 'total_working_hours_formatted' => $this->formatHours($totalSeconds),
             ];
@@ -229,7 +241,7 @@ class ProjectTaskController extends Controller
                     'user'                          => $formerUsers->get($employeeId),
                     'total_working_hours'           => $totalSeconds,
                     'total_working_hours_formatted' => $this->formatHours($totalSeconds),
-                    'removed_from_task'             => true,
+                    'removed_from_task'             => !in_array((int) $employeeId, $assignedInTree, true),
                 ];
             }
         }
