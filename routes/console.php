@@ -22,6 +22,12 @@ Schedule::call(function () {
     Artisan::call('notify:due-reminders');
 })->dailyAt('08:00');
 
+// New month's payroll draft (nothing is approved or paid automatically). Safe to run daily: it
+// does nothing when the month already has a live run, and a missed day is caught up the next morning.
+Schedule::call(function () {
+    Artisan::call('payroll:auto-generate');
+})->dailyAt('09:10');
+
 // Notify admins & executives when an employee's probation period end date is reached.
 Schedule::call(function () {
     Artisan::call('notify:probation-reminders');

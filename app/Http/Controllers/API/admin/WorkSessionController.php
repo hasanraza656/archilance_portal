@@ -318,6 +318,14 @@ class WorkSessionController extends Controller
     public function destroy($id)
     {
         $task = WorkSession::findOrFail($id);
+
+        // A session that is still running can only be deleted by an admin.
+        if (is_null($task->end_time) && !in_array((int) Auth::user()->user_role, [1, 2], true)) {
+            return response()->json([
+                'message' => 'This session is still running. Only an admin can delete it.',
+            ], 403);
+        }
+
         $task->delete();
 
         return response()->json(['message' => 'Work session deleted successfully.']);

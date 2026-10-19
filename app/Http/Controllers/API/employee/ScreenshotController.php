@@ -262,24 +262,61 @@ class ScreenshotController extends Controller
                     fn($ss) => $ss->id === $screenshot->id
                 );
 
-                // Only screenshot in session → delete session too
+                // Last screenshot of the session.
+                //
+                // A session that is STILL RUNNING can only ever be removed by an admin, so an
+                // employee may not delete its last screenshot either (that used to delete the
+                // whole session). For a finished session the screenshot is removed but the session
+                // is kept with ZERO worked time: the whole span is recorded as idle, which can never
+                // push worked time below zero (idle is merged and clamped to the session window).
                 if ($sessionScreenshots->count() === 1) {
 
-                    if (
-                        $screenshot->screenshot_file &&
-                        \Storage::disk('public')->exists($screenshot->screenshot_file)
-                    ) {
-                        // File deletion intentionally disabled
-                        // \Storage::disk('public')->delete($screenshot->screenshot_file);
+                    if (is_null($session->end_time)) {
+                        DB::rollBack();
+
+                        return response()->json([
+                            'message' => 'This session is still running. Only an admin can delete it or its last screenshot.',
+                            'error' => 'This session is still running. Only an admin can delete it or its last screenshot.',
+                        ], 403);
                     }
 
+                    try {
+                        $sessionStartAt = Carbon::parse($session->start_date . ' ' . $session->start_time);
+                        $sessionEndAt = Carbon::parse(($session->end_date ?? $session->start_date) . ' ' . $session->end_time);
+                    } catch (\Throwable $e) {
+                        $sessionStartAt = null;
+                        $sessionEndAt = null;
+                    }
+
+                    if ($sessionStartAt && $sessionEndAt && $sessionEndAt->gt($sessionStartAt)) {
+                        $overlappingIdle = SessionTimeAdjustment::where('session_id', $session->id)
+                            ->whereNotNull('end_time')
+                            ->where('start_time', '<', $sessionEndAt)
+                            ->where('end_time', '>', $sessionStartAt)
+                            ->orderBy('start_time')
+                            ->get();
+
+                        foreach ($this->subtractSlots($sessionStartAt, $sessionEndAt, $overlappingIdle) as [$freeStart, $freeEnd]) {
+                            if ($freeEnd->lte($freeStart)) {
+                                continue;
+                            }
+
+                            SessionTimeAdjustment::create([
+                                'session_id' => $session->id,
+                                'start_time' => $freeStart,
+                                'end_time' => $freeEnd,
+                            ]);
+                        }
+                    }
+
+                    // Soft delete only: the file stays and an admin can still see it under
+                    // "Deleted screenshots".
                     $screenshot->delete();
-                    $session->delete();
 
                     DB::commit();
 
                     return response()->json([
-                        'message' => 'Screenshot and session deleted (only screenshot).'
+                        'message' => 'Screenshot deleted. The session now shows zero time.'
                     ]);
                 }
 

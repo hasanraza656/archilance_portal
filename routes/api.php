@@ -231,9 +231,39 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/salary/{userId}', [App\Http\Controllers\API\admin\SalaryController::class, 'show']);
         Route::post('/salary/{userId}', [App\Http\Controllers\API\admin\SalaryController::class, 'setSalary']);
 
+        // Deleted people (soft-deleted accounts): list + restore. Admin only.
+        Route::get('/trashed-users', [App\Http\Controllers\API\admin\TrashedUserController::class, 'index']);
+        Route::post('/trashed-users/{id}/restore', [App\Http\Controllers\API\admin\TrashedUserController::class, 'restore']);
+
+        // System settings (admin only): server facts + apply pending database updates.
+        Route::get('/system/info', [App\Http\Controllers\API\admin\SystemSettingsController::class, 'info']);
+        Route::get('/system/db-status', [App\Http\Controllers\API\admin\SystemSettingsController::class, 'dbStatus']);
+        Route::post('/system/db-update', [App\Http\Controllers\API\admin\SystemSettingsController::class, 'dbUpdate']);
+
         Route::get('/payroll', [App\Http\Controllers\API\admin\PayrollController::class, 'index']);
         Route::get('/payroll-report', [App\Http\Controllers\API\admin\PayrollController::class, 'report']);
         Route::post('/payroll/generate', [App\Http\Controllers\API\admin\PayrollController::class, 'generate']);
+        // Payroll approval requests (executives ask, admins decide - enforced in the controller).
+        Route::post('/payroll/{id}/request-approval', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'requestApproval']);
+        Route::get('/payroll/{id}/approval-requests', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'forRun']);
+        Route::get('/payroll-approval-requests', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'pending']);
+        Route::get('/payroll-approval-requests/{reqId}/pdf', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'pdf']);
+        Route::post('/payroll-approval-requests/{reqId}/decide', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'decide']);
+
+        // Payroll — advanced: bulk actions, one-click pay, month closing, audit trail, standing items.
+        Route::post('/payroll/{id}/approve-and-pay', [App\Http\Controllers\API\admin\PayrollController::class, 'approveAndPay']);
+        Route::post('/payroll/{id}/bulk', [App\Http\Controllers\API\admin\PayrollController::class, 'bulk']);
+        Route::post('/payroll/{id}/adjustments', [App\Http\Controllers\API\admin\PayrollController::class, 'bulkAdjust']);
+        Route::post('/payroll/{id}/sync', [App\Http\Controllers\API\admin\PayrollController::class, 'sync']);
+        Route::post('/payroll/{id}/close', [App\Http\Controllers\API\admin\PayrollController::class, 'close']);
+        Route::post('/payroll/{id}/reopen-period', [App\Http\Controllers\API\admin\PayrollController::class, 'reopenPeriod']);
+        Route::get('/payroll/{id}/activity', [App\Http\Controllers\API\admin\PayrollController::class, 'activity']);
+        Route::post('/payslip/{payslipId}/status', [App\Http\Controllers\API\admin\PayrollController::class, 'setStatus']);
+        Route::get('/salary/{userId}/recurring', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'index']);
+        Route::post('/salary/{userId}/recurring', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'store']);
+        Route::post('/salary/{userId}/recurring/{itemId}', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'update']);
+        Route::delete('/salary/{userId}/recurring/{itemId}', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'destroy']);
+
         Route::get('/payroll/{id}', [App\Http\Controllers\API\admin\PayrollController::class, 'show']);
         Route::post('/payroll/{id}/submit', [App\Http\Controllers\API\admin\PayrollController::class, 'submit']);
         Route::post('/payroll/{id}/approve', [App\Http\Controllers\API\admin\PayrollController::class, 'approve']);
@@ -274,6 +304,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Monthly manager/executive ratings — admin sees every rating and who gave it.
         Route::get('/manager-evaluations', [App\Http\Controllers\API\employee\ManagerEvaluationController::class, 'adminIndex']);
+
+        // Internee grading — admin sees every rating and every internee, soft-deleted ones included (read-only).
+        Route::get('/my-internees', [App\Http\Controllers\API\admin\InterneeGradingAdminController::class, 'internees']);
+        Route::get('/internee-grading/summary', [App\Http\Controllers\API\admin\InterneeGradingAdminController::class, 'summary']);
+        Route::get('/internee-rating', [App\Http\Controllers\API\admin\InterneeGradingAdminController::class, 'index']);
 
     });
 
@@ -485,6 +520,27 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/payroll', [App\Http\Controllers\API\admin\PayrollController::class, 'index']);
             Route::get('/payroll-report', [App\Http\Controllers\API\admin\PayrollController::class, 'report']);
             Route::post('/payroll/generate', [App\Http\Controllers\API\admin\PayrollController::class, 'generate']);
+            // Payroll approval requests (executives ask, admins decide - enforced in the controller).
+            Route::post('/payroll/{id}/request-approval', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'requestApproval']);
+            Route::get('/payroll/{id}/approval-requests', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'forRun']);
+            Route::get('/payroll-approval-requests', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'pending']);
+            Route::get('/payroll-approval-requests/{reqId}/pdf', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'pdf']);
+            Route::post('/payroll-approval-requests/{reqId}/decide', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'decide']);
+
+            // Payroll — advanced: bulk actions, one-click pay, month closing, audit trail, standing items.
+            Route::post('/payroll/{id}/approve-and-pay', [App\Http\Controllers\API\admin\PayrollController::class, 'approveAndPay']);
+            Route::post('/payroll/{id}/bulk', [App\Http\Controllers\API\admin\PayrollController::class, 'bulk']);
+            Route::post('/payroll/{id}/adjustments', [App\Http\Controllers\API\admin\PayrollController::class, 'bulkAdjust']);
+            Route::post('/payroll/{id}/sync', [App\Http\Controllers\API\admin\PayrollController::class, 'sync']);
+            Route::post('/payroll/{id}/close', [App\Http\Controllers\API\admin\PayrollController::class, 'close']);
+            Route::post('/payroll/{id}/reopen-period', [App\Http\Controllers\API\admin\PayrollController::class, 'reopenPeriod']);
+            Route::get('/payroll/{id}/activity', [App\Http\Controllers\API\admin\PayrollController::class, 'activity']);
+            Route::post('/payslip/{payslipId}/status', [App\Http\Controllers\API\admin\PayrollController::class, 'setStatus']);
+            Route::get('/salary/{userId}/recurring', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'index']);
+            Route::post('/salary/{userId}/recurring', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'store']);
+            Route::post('/salary/{userId}/recurring/{itemId}', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'update']);
+            Route::delete('/salary/{userId}/recurring/{itemId}', [App\Http\Controllers\API\admin\RecurringPayrollController::class, 'destroy']);
+
             Route::get('/payroll/{id}', [App\Http\Controllers\API\admin\PayrollController::class, 'show']);
             Route::post('/payroll/{id}/submit', [App\Http\Controllers\API\admin\PayrollController::class, 'submit']);
             Route::post('/payroll/{id}/approve', [App\Http\Controllers\API\admin\PayrollController::class, 'approve']);
