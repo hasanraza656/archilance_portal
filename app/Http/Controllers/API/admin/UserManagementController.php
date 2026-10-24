@@ -96,6 +96,48 @@ class UserManagementController extends Controller
     }
 
 
+    /**
+     * Optional ?employee_team= filter. Opt-in: when the parameter is absent the query is untouched,
+     * so older clients are unaffected.
+     *
+     *   ?employee_team=3D Team           single team, matched literally
+     *   ?employee_team=BIM Team,3D Team  comma-separated list
+     *   ?employee_team=none              rows with no team set (NULL or '')
+     *   ?employee_team=3D Team,none      a team OR no team
+     *
+     * Applied with its own group, so it can only narrow what the visibility rules already allow.
+     */
+    private function applyEmployeeTeamFilter($query, Request $request): void
+    {
+        if (!$request->filled('employee_team')) {
+            return;
+        }
+
+        $requested = collect(explode(',', (string) $request->input('employee_team')))
+            ->map(fn ($t) => trim($t))
+            ->filter(fn ($t) => $t !== '')
+            ->unique()
+            ->values();
+
+        if ($requested->isEmpty()) {
+            return;
+        }
+
+        $named = $requested->reject(fn ($t) => strtolower($t) === 'none')->values();
+        $wantsNone = $requested->contains(fn ($t) => strtolower($t) === 'none');
+
+        $query->where(function ($q) use ($named, $wantsNone) {
+            if ($named->isNotEmpty()) {
+                $q->whereIn('employee_team', $named->all());
+            }
+            if ($wantsNone) {
+                $none = fn ($x) => $x->whereNull('employee_team')->orWhere('employee_team', '');
+                $named->isNotEmpty() ? $q->orWhere($none) : $q->where($none);
+            }
+        });
+    }
+
+
     public function index(Request $request)
     {
         $roleId = $this->getRoleFromRequest($request);
@@ -110,6 +152,9 @@ class UserManagementController extends Controller
 
         // Optional ?employee_type= filter (no-op when the param is absent).
         $this->applyEmployeeTypeFilter($query, $request);
+
+        // Optional ?employee_team= filter (no-op when the param is absent).
+        $this->applyEmployeeTeamFilter($query, $request);
 
         // Optional server-side search across the common identity fields. Opt-in: when the
         // `search` param is absent the query is untouched, so a backend-only deploy leaves

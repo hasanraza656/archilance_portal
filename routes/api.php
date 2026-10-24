@@ -175,6 +175,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
         //dashboard
         Route::get('/dashboard', [App\Http\Controllers\API\DashboardController::class, 'adminStats']);
+        // Same data under the same name the employee app uses (/api/employee/stats), for the mobile app.
+        Route::get('/stats', [App\Http\Controllers\API\DashboardController::class, 'adminStats']);
 
         Route::get('/all_subscriptions', [App\Http\Controllers\API\customer\SubscriptionController::class, 'adminAllSubscriptions']);
 
@@ -307,6 +309,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Internee grading — admin sees every rating and every internee, soft-deleted ones included (read-only).
         Route::get('/my-internees', [App\Http\Controllers\API\admin\InterneeGradingAdminController::class, 'internees']);
+        // IT team feedback — admin is the only role that can read the answers.
+        Route::get('/it-feedback', [App\Http\Controllers\API\ItFeedbackController::class, 'adminIndex']);
+
         Route::get('/internee-grading/summary', [App\Http\Controllers\API\admin\InterneeGradingAdminController::class, 'summary']);
         Route::get('/internee-rating', [App\Http\Controllers\API\admin\InterneeGradingAdminController::class, 'index']);
 
@@ -609,6 +614,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // Tracker "week pulse" banner data (self only).
         Route::get('/work-pulse', [App\Http\Controllers\API\employee\WorkPulseController::class, 'show']);
 
+        // Tracker "pick up where you left off": the tasks this person worked on lately (self only).
+        Route::get('/recent-work', [App\Http\Controllers\API\employee\RecentWorkController::class, 'index']);
+
         // Home dashboard: month leaderboard, team, team leaves, evaluations (read-only).
         Route::get('/home-stats', [App\Http\Controllers\API\employee\HomeStatsController::class, 'show']);
 
@@ -725,6 +733,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
+
+// IT team feedback (everyone inside the portal except customers; the controller enforces who).
+Route::prefix('it-feedback')->middleware('auth:sanctum')->group(function () {
+    Route::get('status', [App\Http\Controllers\API\ItFeedbackController::class, 'status']);
+    Route::post('skip', [App\Http\Controllers\API\ItFeedbackController::class, 'skip']);
+    Route::post('submit', [App\Http\Controllers\API\ItFeedbackController::class, 'submit']);
+});
 
 Route::prefix('chat')->middleware('auth:sanctum')->group(function () {
     Route::post('send', [ChatController::class, 'store']);

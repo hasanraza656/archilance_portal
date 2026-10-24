@@ -121,6 +121,14 @@ class DatabaseUpdates
                 'tables' => ['payroll_approval_requests'],
                 'columns' => [],
             ],
+            [
+                'key' => 'it_feedback',
+                'title' => 'IT team feedback',
+                'description' => 'Creates the it_feedback table (staff rate the IT team; only admins read the answers).',
+                'files' => ['2026_10_20_100000_create_it_feedback_table.php'],
+                'tables' => ['it_feedback'],
+                'columns' => [],
+            ],
         ];
     }
 
