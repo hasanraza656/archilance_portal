@@ -754,6 +754,51 @@ Route::prefix('chat')->middleware('auth:sanctum')->group(function () {
     Route::delete('delete/{id}', [ChatController::class, 'deleteMessage']);
 });
 
+// Chat v2 (web portal): smart inbox, groups, threads, pins/mutes, big files. Separate from the routes above,
+// which the Android app uses and which are untouched. Every endpoint answers "not available yet" until the
+// chat_v2 database update has been applied (System settings -> Update database).
+Route::prefix('chat/v2')->middleware('auth:sanctum')->group(function () {
+    $c = App\Http\Controllers\API\ChatV2Controller::class;
+    $g = App\Http\Controllers\API\ChatGroupController::class;
+    $f = App\Http\Controllers\API\ChatFileController::class;
+
+    Route::get('status', [$c, 'status']);
+    Route::get('inbox', [$c, 'inbox']);
+    Route::get('conversation', [$c, 'conversation']);
+    Route::get('search', [$c, 'search']);
+    Route::get('tags/search', [\App\Http\Controllers\API\ChatTagController::class, 'search']);
+    Route::get('tags/{type}/{id}', [\App\Http\Controllers\API\ChatTagController::class, 'show'])->whereNumber('id');
+    Route::get('messages/{id}/thread', [$c, 'thread']);
+    Route::post('send', [$c, 'send']);
+    Route::post('messages/{id}/edit', [$c, 'edit']);
+    Route::post('read', [$c, 'read']);
+    Route::post('settings', [$c, 'settings']);
+    Route::post('ping', [$c, 'ping']);
+    Route::get('insights/{userId}', [$c, 'insights']);
+
+    Route::post('groups', [$g, 'store']);
+    Route::get('groups/{id}', [$g, 'show']);
+    Route::post('groups/{id}', [$g, 'update']);
+    Route::delete('groups/{id}', [$g, 'destroy']);
+    Route::post('groups/{id}/members', [$g, 'addMembers']);
+    Route::delete('groups/{id}/members/{userId}', [$g, 'removeMember']);
+    Route::post('groups/{id}/members/{userId}/role', [$g, 'setRole']);
+
+    Route::post('uploads', [$f, 'init']);
+    Route::post('uploads/thumb', [$f, 'thumb']);
+    Route::post('attachments/{id}/variants', [$f, 'registerVariant'])->whereNumber('id');
+    Route::get('uploads/{id}', [$f, 'status']);
+    Route::post('uploads/{id}/chunk', [$f, 'chunk']);
+    Route::delete('uploads/{id}', [$f, 'cancel']);
+});
+
+// Signed, expiring links (made by ChatCore::fileUrl / the group list) - <img> and the PDF viewer cannot send a login header.
+Route::get('chat/v2/files/{attachment}', [App\Http\Controllers\API\ChatFileController::class, 'file'])
+    ->name('chat.v2.file')->middleware('signed:relative');
+Route::get('chat/v2/groups/{group}/avatar', [App\Http\Controllers\API\ChatGroupController::class, 'avatar'])
+    ->name('chat.v2.groupavatar')->middleware('signed:relative');
+
+
 
 //Route::get('/logout-other/{id}', [App\Http\Controllers\API\AuthController::class, 'logoutOtherUser']);
 

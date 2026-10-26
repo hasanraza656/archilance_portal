@@ -45,3 +45,9 @@ Schedule::call(function () {
 Schedule::call(function () {
     Artisan::call('internee:auto-zero-grading');
 })->dailyAt('01:30');
+
+// One calm digest for chat messages that stayed unread (never an email per message). Does nothing until the
+// chat_v2 database update has been applied. Every 5 minutes is plenty: it only emails after 15 minutes unread.
+Schedule::call(function () {
+    Artisan::call('chat:email-digest');
+})->everyFiveMinutes();

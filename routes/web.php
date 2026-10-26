@@ -109,3 +109,8 @@ Route::get('/run-scheduler', function () {
 
 
 
+
+// Claude connector (MCP) for admins. Additive: every URL it adds answers 404 until MCP_ENABLED=true is set in .env.
+if (is_file(__DIR__ . '/mcp.php')) {
+    require __DIR__ . '/mcp.php';
+}

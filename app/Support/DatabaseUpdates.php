@@ -129,6 +129,35 @@ class DatabaseUpdates
                 'tables' => ['it_feedback'],
                 'columns' => [],
             ],
+            [
+                'key' => 'chat_v2',
+                'title' => 'Chat: groups, threads, pins, mutes, big files',
+                'description' => 'Adds chat groups and members, pin/mute settings, presence, resumable upload sessions, and a few columns on chats / chat_attachments.',
+                'files' => ['2026_10_24_100000_chat_v2.php'],
+                'tables' => ['chat_groups', 'chat_group_members', 'chat_peer_settings', 'chat_presence', 'chat_uploads'],
+                'columns' => [
+                    'chats' => ['group_id', 'thread_root_id', 'is_system', 'edited_at'],
+                    'chat_attachments' => ['thumb_path', 'width', 'height', 'pages'],
+                ],
+            ],
+            [
+                'key' => 'chat_video',
+                'title' => 'Chat: screen recordings & video quality',
+                'description' => 'Adds video duration and lower-quality copies (720p / 480p / 360p) so chat videos play smoothly on slow connections.',
+                'files' => ['2026_10_25_100000_chat_video.php'],
+                'tables' => ['chat_attachment_variants'],
+                'columns' => [
+                    'chat_attachments' => ['duration_ms'],
+                ],
+            ],
+            [
+                'key' => 'mcp_server',
+                'title' => 'Claude connector (MCP) for admins',
+                'description' => 'Adds the tables for the admin-only Claude connector: connected apps, sign-in codes, access tokens and an audit log of what Claude did.',
+                'files' => ['2026_10_26_100000_mcp_server.php'],
+                'tables' => ['mcp_clients', 'mcp_auth_codes', 'mcp_tokens', 'mcp_audit_logs'],
+                'columns' => [],
+            ],
         ];
     }
 

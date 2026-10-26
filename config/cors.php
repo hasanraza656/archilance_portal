@@ -25,9 +25,11 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    // Lets the browser read the byte-range headers of the chat file proxy (PDF viewer loads pages on demand).
+    'exposed_headers' => ['Content-Range', 'Accept-Ranges', 'Content-Length'],
 
-    'max_age' => 0,
+    // Browsers may remember a successful pre-flight check for up to 2 hours (saves a round trip on every API call).
+    'max_age' => 7200,
 
     'supports_credentials' => false,
 

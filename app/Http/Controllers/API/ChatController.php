@@ -113,8 +113,19 @@ class ChatController extends Controller
             }
         }
     
+        // Chat v2: once its database update is applied, a chat the receiver has MUTED stays silent (no bell,
+        // no push, no email), and emails come only from the unread digest (App\Services\ChatDigest) instead of
+        // one per message. Before that update this block changes nothing.
+        $chatV2 = \App\Support\ChatSchema::ready();
+        $mutedByReceiver = $chatV2 && \App\Services\ChatCore::isMutedFor($receiver->id, 'user', $senderId);
+        if ($chatV2) {
+            $shouldSendEmail = false;
+        }
+
         // In-app notification (always) + professional email (respecting the smart gating above)
-        chatMessageNotification($receiver, Auth::user(), $request->message, $shouldSendEmail);
+        if (!$mutedByReceiver) {
+            chatMessageNotification($receiver, Auth::user(), $request->message, $shouldSendEmail);
+        }
 
         // Send email
         /*
@@ -145,7 +156,7 @@ class ChatController extends Controller
         
         
         
-        if (!empty($receiver->fcm_token)) {
+        if (!$mutedByReceiver && !empty($receiver->fcm_token)) {
         
             $senderName = Auth::user()->name;
         
