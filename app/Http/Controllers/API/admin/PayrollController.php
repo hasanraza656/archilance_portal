@@ -12,6 +12,8 @@ use App\Models\User;
 use App\Services\PayrollAudit;
 use App\Services\PayrollGenerator;
 use App\Services\PayrollWorkflow;
+use App\Models\PayrollPayee;
+use App\Support\PayrollAccess;
 use App\Support\PayrollSchema;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -56,10 +58,12 @@ class PayrollController extends Controller
             ->get();
 
         PayrollRun::attachMoney($runs);
+        PayrollAccess::restrictRuns($runs);
 
         return response()->json([
-            'data'     => $runs,
-            'advanced' => PayrollSchema::advanced(),
+            'data'       => $runs,
+            'advanced'   => PayrollSchema::advanced(),
+            'restricted' => PayrollAccess::restricted(),
         ]);
     }
 
@@ -67,16 +71,22 @@ class PayrollController extends Controller
     {
         $run = PayrollRun::with(['creator:id,name', 'approver:id,name'])->findOrFail($id);
         PayrollRun::attachMoney([$run]);
+        PayrollAccess::restrictRuns([$run]);
 
-        $payslips = Payslip::with('items')
-            ->where('payroll_run_id', $run->id)
+        // Executives' payslips are left out for anyone who may not see them (the run totals above already exclude them).
+        $payslips = PayrollAccess::visibleSlips(Payslip::with('items')->where('payroll_run_id', $run->id))
             ->orderBy('employee_name')
             ->get();
 
         // Account / wallet the person is paid into (from their salary profile), for the payment sheet.
         $profiles = SalaryProfile::whereIn('user_id', $payslips->pluck('user_id'))->get()->keyBy('user_id');
         $payslips->each(function ($slip) use ($profiles) {
-            $slip->setAttribute('payment_account', $profiles->get($slip->user_id)->payment_reference ?? null);
+            $profile = $profiles->get($slip->user_id);
+            $slip->setAttribute('payment_account', $profile->payment_reference ?? null);
+            $slip->setAttribute('is_provider', PayrollPayee::isVirtual($slip->user_id));
+            if (empty($slip->payout_route)) {
+                $slip->setAttribute('payout_route', $profile->payout_route ?? 'payoneer');
+            }
         });
 
         return response()->json([
@@ -87,6 +97,7 @@ class PayrollController extends Controller
             'adjustable' => $run->canAdjust(),
             'closed'     => $run->isClosed(),
             'advanced'   => PayrollSchema::advanced(),
+            'restricted' => PayrollAccess::restricted(),
         ]);
     }
 
@@ -329,7 +340,8 @@ class PayrollController extends Controller
             $have = $run->payslips()->pluck('user_id')->flip();
 
             if ($addMissing) {
-                $users = User::whereIn('id', $profiles->keys())->where('user_role', 3)->get()->keyBy('id');
+                $users = $generator->staffFor($profiles->keys()->all(), $month)
+                    ->union($generator->activePayees($profiles->keys()->all())->all());
                 $standing = PayrollSchema::table('recurring_payroll_items')
                     ? \App\Models\RecurringPayrollItem::appliesTo($month)->get()->groupBy('user_id')
                     : collect();
@@ -362,6 +374,21 @@ class PayrollController extends Controller
                         $refreshed++;
                         PayrollAudit::log('payslip.basic_changed', $run->id, $slip->id, $slip->user_id, (string) $old, (string) $new, $new, 'Refreshed from salary profile');
                     }
+                }
+            }
+
+            // Bring unpaid slips up to date: people who have since left are paid only for the days they worked, approved
+            // unpaid leave is deducted, and the "why this amount" notes are rewritten.
+            foreach ($run->payslips()->whereIn('status', self::AWAITING)->get() as $slip) {
+                if (PayrollPayee::isVirtual($slip->user_id)) {
+                    continue;
+                }
+                $who = User::withTrashed()->find($slip->user_id);
+                $before = (float) $slip->net_amount;
+                if ($who && $generator->refreshSlip($slip, $who, $profiles->get($slip->user_id) ?? SalaryProfile::where('user_id', $slip->user_id)->first(), $month, Auth::id())) {
+                    $slip = $slip->fresh();
+                    $refreshed++;
+                    PayrollAudit::log('payslip.updated_from_records', $run->id, $slip->id, $slip->user_id, number_format($before, 2, '.', ''), number_format((float) $slip->net_amount, 2, '.', ''), (float) $slip->net_amount, $slip->status === 'Skipped' ? ($slip->status_reason ?? 'Left out') : 'Updated for leaving date / unpaid leave');
                 }
             }
 
@@ -434,7 +461,7 @@ class PayrollController extends Controller
             return response()->json(['message' => 'Pick at least one payslip.'], 422);
         }
 
-        $slips = $run->payslips()
+        $slips = PayrollAccess::visibleSlips($run->payslips())
             ->when(!$request->boolean('all'), fn ($q) => $q->whereIn('id', $data['ids']))
             ->when($request->boolean('all') && !empty($data['statuses']), fn ($q) => $q->whereIn('status', $data['statuses']))
             ->get();
@@ -486,7 +513,7 @@ class PayrollController extends Controller
             return response()->json(['message' => 'That percentage is too large.'], 422);
         }
 
-        $slips = $run->payslips()
+        $slips = PayrollAccess::visibleSlips($run->payslips())
             ->when(!$request->boolean('all'), fn ($q) => $q->whereIn('id', $data['ids']))
             ->get();
 
@@ -540,6 +567,46 @@ class PayrollController extends Controller
         ], $done === 0 ? 422 : 200);
     }
 
+    /**
+     * Working Hours and Salary Policy check: who recorded less than 50% of the required hours in this run's month.
+     * Informational only (HR decides); executives' payslips stay hidden from people who may not see them.
+     */
+    public function hoursCheck($id, \App\Services\WorkHoursPolicy $policy)
+    {
+        $run = PayrollRun::findOrFail($id);
+        $month = Carbon::parse($run->period_month)->startOfMonth();
+
+        $slips = PayrollAccess::visibleSlips(Payslip::query())
+            ->where('payroll_run_id', $run->id)
+            ->where('user_id', '<', PayrollPayee::BASE)
+            ->whereNotIn('status', ['Skipped'])
+            ->get(['id', 'user_id', 'employee_name', 'department', 'status', 'currency', 'net_amount']);
+
+        $stats = $policy->forMonth($slips->pluck('user_id')->all(), $month);
+
+        $rows = $slips->map(function ($sl) use ($stats) {
+            $x = $stats[$sl->user_id] ?? null;
+
+            return $x ? [
+                'payslip_id' => $sl->id,
+                'user_id' => $sl->user_id,
+                'name' => $sl->employee_name,
+                'team' => $sl->department,
+                'status' => $sl->status,
+                'net' => (float) $sl->net_amount,
+                'currency' => $sl->currency ?: 'PKR',
+            ] + $x : null;
+        })->filter()->sortBy(fn ($r) => $r['pct'] ?? 999)->values();
+
+        return response()->json([
+            'month_complete' => $policy::monthComplete($month),
+            'hours_per_day' => $policy::hoursPerDay(),
+            'threshold_pct' => (int) round($policy::THRESHOLD * 100),
+            'low_count' => $rows->where('low', true)->count(),
+            'data' => $rows,
+        ]);
+    }
+
     /** The audit trail for one run, newest first. */
     public function activity($id)
     {
@@ -549,8 +616,11 @@ class PayrollController extends Controller
             return response()->json(['supported' => false, 'data' => []]);
         }
 
+        $hidden = PayrollAccess::hiddenUserIds();
+        $payees = PayrollPayee::keyedByVirtualId(PayrollAuditLog::where('payroll_run_id', $run->id)->where('user_id', '>=', PayrollPayee::BASE)->pluck('user_id')->unique()->all());
         $rows = PayrollAuditLog::with(['actor:id,name', 'employee:id,name'])
             ->where('payroll_run_id', $run->id)
+            ->when($hidden, fn ($q) => $q->where(fn ($w) => $w->whereNull('user_id')->orWhereNotIn('user_id', $hidden)))
             ->orderByDesc('id')
             ->limit(500)
             ->get()
@@ -558,12 +628,13 @@ class PayrollController extends Controller
                 'id'        => $r->id,
                 'action'    => $r->action,
                 'actor'     => $r->actor?->name ?? 'System',
-                'employee'  => $r->employee?->name,
+                'employee'  => $r->employee?->name ?? ($payees->get((int) $r->user_id)->name ?? null),
                 'payslip_id' => $r->payslip_id,
                 'from'      => $r->from_value,
                 'to'        => $r->to_value,
-                'amount'    => $r->amount,
-                'detail'    => $r->detail,
+                // Run-wide lines (generated, approved...) carry the total of everyone, executives included.
+                'amount'    => ($hidden && !$r->user_id) ? null : $r->amount,
+                'detail'    => ($hidden && !$r->user_id) ? null : $r->detail,
                 'at'        => $r->created_at?->toIso8601String(),
             ]);
 
@@ -575,6 +646,7 @@ class PayrollController extends Controller
     public function showPayslip($payslipId)
     {
         $payslip = Payslip::with(['items', 'run', 'user:id,name,email,profile_pic'])->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         return response()->json(['data' => $payslip]);
     }
@@ -583,6 +655,7 @@ class PayrollController extends Controller
     public function updatePayslip(Request $request, $payslipId)
     {
         $payslip = Payslip::with('run')->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         $data = $request->validate([
             'status'            => 'nullable|in:Pending,Approved,On Hold,Skipped',
@@ -659,6 +732,7 @@ class PayrollController extends Controller
         ]);
 
         $payslip = Payslip::with('run')->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         $outcome = DB::transaction(
             fn () => $this->applyToSlips($payslip->run, collect([$payslip]), $data['action'], $this->paymentOptions($request) + ['reason' => $data['reason'] ?? null])
@@ -679,6 +753,7 @@ class PayrollController extends Controller
     public function addItem(Request $request, $payslipId)
     {
         $payslip = Payslip::with('run')->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         $data = $request->validate([
             'kind'     => 'required|in:earning,deduction',
@@ -713,6 +788,7 @@ class PayrollController extends Controller
     public function deleteItem($payslipId, $itemId)
     {
         $payslip = Payslip::with('run')->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         if (!$payslip->run || !$payslip->run->canAdjust() || $payslip->status === 'Paid') {
             return response()->json(['message' => 'This payslip can no longer be edited.'], 422);
@@ -741,6 +817,7 @@ class PayrollController extends Controller
         }
 
         $payslip = Payslip::with('run')->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         $request->validate([
             'payment_reference' => 'nullable|string|max:190',
@@ -769,6 +846,7 @@ class PayrollController extends Controller
         }
 
         $payslip = Payslip::with('run')->findOrFail($payslipId);
+        $this->guardSlip($payslip);
 
         $outcome = DB::transaction(fn () => $this->applyToSlips($payslip->run, collect([$payslip]), 'unpay', []));
 
@@ -792,7 +870,7 @@ class PayrollController extends Controller
         $from = $request->filled('from') ? Carbon::parse($request->input('from'))->startOfMonth() : Carbon::today()->startOfYear();
         $to   = $request->filled('to') ? Carbon::parse($request->input('to'))->endOfMonth() : Carbon::today()->endOfMonth();
 
-        $rows = Payslip::query()
+        $allRows = PayrollAccess::visibleSlips(Payslip::query())
             ->join('payroll_runs', 'payroll_runs.id', '=', 'payslips.payroll_run_id')
             ->whereNull('payroll_runs.deleted_at')
             ->where('payroll_runs.status', '!=', PayrollRun::CANCELLED)
@@ -809,6 +887,12 @@ class PayrollController extends Controller
             ->orderByDesc('payslips.period_month')
             ->orderBy('payslips.employee_name')
             ->get();
+
+        // PKR (the company currency) is what the roll-ups add up. Slips in another currency (USD salaries) are never
+        // mixed into those figures: they are still in the register and outstanding list, and summarised in by_currency.
+        $currencies = $allRows->pluck('currency')->map(fn ($c) => $c ?: 'PKR')->unique()->values();
+        $primary = $currencies->contains('PKR') ? 'PKR' : ($currencies->first() ?? 'PKR');
+        $rows = $allRows->filter(fn ($r) => ($r->currency ?: 'PKR') === $primary)->values();
 
         $sum = function ($g) {
             $awaiting = $g->whereIn('status', self::AWAITING);
@@ -878,8 +962,12 @@ class PayrollController extends Controller
             })
             ->sortByDesc('total')->values();
 
+        $byCurrency = $allRows->groupBy(fn ($r) => $r->currency ?: 'PKR')
+            ->map(fn ($g, $cur) => ['currency' => $cur] + $sum($g))
+            ->values();
+
         $today = Carbon::today();
-        $outstanding = $rows->whereIn('status', array_merge(self::AWAITING, ['On Hold']))
+        $outstanding = $allRows->whereIn('status', array_merge(self::AWAITING, ['On Hold']))
             ->map(fn ($r) => [
                 'id'          => $r->id,
                 'run_id'      => $r->payroll_run_id,
@@ -894,7 +982,7 @@ class PayrollController extends Controller
                 'age_days'    => max(0, (int) Carbon::parse($r->period_month)->endOfMonth()->diffInDays($today, false)),
             ])->sortByDesc('age_days')->values();
 
-        $register = $rows->map(fn ($r) => [
+        $register = $allRows->map(fn ($r) => [
             'id'                => $r->id,
             'run_id'            => $r->payroll_run_id,
             'payslip_no'        => $r->payslip_no,
@@ -914,9 +1002,8 @@ class PayrollController extends Controller
             'paid_at'           => $r->paid_at,
             'payment_method'    => $r->payment_method,
             'payment_reference' => $r->payment_reference,
+            'payout_route'      => $r->payout_route ?? 'payoneer',
         ])->values();
-
-        $currencies = $rows->pluck('currency')->filter()->unique()->values();
 
         return response()->json([
             'data'        => $register,
@@ -927,13 +1014,23 @@ class PayrollController extends Controller
             'by_category' => $byCategory,
             'outstanding' => $outstanding,
             'range'       => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
-            'currency'    => $currencies->first() ?? 'PKR',
+            'currency'    => $primary,
             'mixed_currency' => $currencies->count() > 1,
+            'by_currency' => $byCurrency,
+            'restricted'  => PayrollAccess::restricted(),
             'totals'      => $sum($rows),
         ]);
     }
 
     /* ------------------------------ internals ---------------------------- */
+
+    /** 403 when this payslip belongs to someone whose salary the viewer may not see. */
+    private function guardSlip(Payslip $payslip): void
+    {
+        if (PayrollAccess::slipHidden($payslip)) {
+            abort(403, 'You do not have access to this payslip.');
+        }
+    }
 
     private function paymentOptions(Request $request): array
     {
@@ -1130,6 +1227,9 @@ class PayrollController extends Controller
         try {
             $label = Carbon::parse($run->period_month)->format('F Y');
             foreach ($slips as $slip) {
+                if (PayrollPayee::isVirtual($slip->user_id)) {
+                    continue;
+                }
                 insertNotificationWithNature(
                     $slip->user_id,
                     Auth::id() ?? $slip->user_id,

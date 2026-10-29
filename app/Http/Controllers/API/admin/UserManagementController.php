@@ -138,6 +138,49 @@ class UserManagementController extends Controller
     }
 
 
+    /**
+     * Optional "hire end date" (last day / contract end). Opt-in like employee_team and gender: written only when the
+     * request actually carries the key AND the column exists, so an older client can never blank it on an ordinary
+     * edit, and uploading this code before the database update (System settings -> Update database) changes nothing.
+     */
+    private function hireEndDateData(Request $request): array
+    {
+        if (!$request->has('hire_end_date') || !\Illuminate\Support\Facades\Schema::hasColumn('users', 'hire_end_date')) {
+            return [];
+        }
+
+        $value = $request->input('hire_end_date');
+
+        return ['hire_end_date' => ($value === null || $value === '') ? null : \Carbon\Carbon::parse($value)->toDateString()];
+    }
+
+    /** 422 when the hire end date is not a date, or falls before the joining date. Null when fine / not sent. */
+    private function hireEndDateProblem(Request $request, $joiningFallback = null)
+    {
+        if (!$request->filled('hire_end_date')) {
+            return null;
+        }
+
+        try {
+            $end = \Carbon\Carbon::parse($request->input('hire_end_date'))->startOfDay();
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Hire end date is not a valid date.', 'errors' => ['hire_end_date' => ['Hire end date is not a valid date.']]], 422);
+        }
+
+        $joining = $request->filled('joining_date') ? $request->input('joining_date') : $joiningFallback;
+        if ($joining) {
+            try {
+                if ($end->lt(\Carbon\Carbon::parse($joining)->startOfDay())) {
+                    return response()->json(['message' => 'Hire end date cannot be before the joining date.', 'errors' => ['hire_end_date' => ['Hire end date cannot be before the joining date.']]], 422);
+                }
+            } catch (\Throwable $e) {
+                // an unreadable joining date is not this field's problem
+            }
+        }
+
+        return null;
+    }
+
     public function index(Request $request)
     {
         $roleId = $this->getRoleFromRequest($request);
@@ -273,6 +316,10 @@ class UserManagementController extends Controller
             'password' => 'required|string|min:6',
         ]);
 
+        if ($problem = $this->hireEndDateProblem($request)) {
+            return $problem;
+        }
+
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
@@ -293,7 +340,7 @@ class UserManagementController extends Controller
             // 1 = "contract already accepted" (login allowed immediately); absent -> 0
             // (gated, must accept the contract before logging in).
             'contract_status' => (int) $request->boolean('contract_status'),
-        ]);
+        ] + $this->hireEndDateData($request));
 
         return response()->json($user, 201);
     }
@@ -366,6 +413,12 @@ class UserManagementController extends Controller
         if ($request->filled('password')) {
             $updateData['password'] = bcrypt($request->password);
         }
+
+        if ($problem = $this->hireEndDateProblem($request, $user->joining_date)) {
+            return $problem;
+        }
+
+        $updateData += $this->hireEndDateData($request);
 
         $user->update($updateData);
     

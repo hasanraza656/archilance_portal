@@ -361,7 +361,7 @@ class WorkSessionController extends Controller
             'end_date' => 'required|date',
             'end_time' => 'required|date_format:H:i,H:i:s',
             'memo_content' => 'nullable|string',
-        ]);
+        ] + \App\Services\WorkSessionProof::rules());
 
         if ($validator->fails()) {
             return response()->json(['message' => $validator->errors()->first(), 'errors' => $validator->errors()], 422);
@@ -378,6 +378,14 @@ class WorkSessionController extends Controller
             return response()->json(['message' => 'End time must be after the start time.'], 422);
         }
 
+        try {
+            $proof = app(\App\Services\WorkSessionProof::class)->upload(\App\Services\WorkSessionProof::fileFrom($request), (int) $request->user_id);
+        } catch (\Throwable $e) {
+            \Log::warning('Manual time attachment upload failed: ' . $e->getMessage());
+
+            return response()->json(['message' => 'The attachment could not be uploaded, so nothing was saved. Please try again.'], 502);
+        }
+
         $data = new WorkSession();
         $data->user_id = $request->user_id;
         $data->start_date = $request->start_date;
@@ -387,10 +395,13 @@ class WorkSessionController extends Controller
         $data->memo_content = $request->memo_content;
         $data->task_id = $request->task_id;
         $data->type = 'Manual';
+        if ($proof) {
+            $data->forceFill($proof);
+        }
         $data->save();
 
         return response()->json([
-            'message' => 'Manual time added successfully.',
+            'message' => 'Manual time added successfully.' . ($proof ? ' Attachment saved.' : ''),
             'work_session' => $data
         ]);
 

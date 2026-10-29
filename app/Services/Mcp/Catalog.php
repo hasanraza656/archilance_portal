@@ -4,6 +4,7 @@ namespace App\Services\Mcp;
 
 use App\Services\Mcp\Tools\AdminTools;
 use App\Services\Mcp\Tools\ChatTools;
+use App\Services\Mcp\Tools\ExperienceLetterTools;
 use App\Services\Mcp\Tools\LeaveTools;
 use App\Services\Mcp\Tools\PayrollTools;
 use App\Services\Mcp\Tools\PeopleTools;
@@ -29,6 +30,7 @@ final class Catalog
                 TimeTools::all(),
                 LeaveTools::all(),
                 PayrollTools::all(),
+                ExperienceLetterTools::all(),
                 array_slice($admin, 1),
             );
             self::$all = [];

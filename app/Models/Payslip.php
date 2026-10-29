@@ -25,6 +25,7 @@ class Payslip extends Model
         'total_deductions' => 'decimal:2',
         'gross_amount'     => 'decimal:2',
         'net_amount'       => 'decimal:2',
+        'pay_notes'        => 'array',
     ];
 
     public function run()

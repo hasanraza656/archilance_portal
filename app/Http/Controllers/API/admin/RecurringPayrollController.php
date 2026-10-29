@@ -34,6 +34,7 @@ class RecurringPayrollController extends Controller
             return $r;
         }
 
+        \App\Support\PayrollAccess::guard($userId);
         User::where('user_role', 3)->findOrFail($userId);
 
         $rows = RecurringPayrollItem::where('user_id', $userId)
@@ -51,6 +52,7 @@ class RecurringPayrollController extends Controller
             return response()->json(['message' => 'Run the latest database update first (System settings).'], 503);
         }
 
+        \App\Support\PayrollAccess::guard($userId);
         User::where('user_role', 3)->findOrFail($userId);
 
         $data = $request->validate([

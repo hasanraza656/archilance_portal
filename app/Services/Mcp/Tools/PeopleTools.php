@@ -165,6 +165,7 @@ final class PeopleTools
                     'gender' => $u->gender ?? null,
                     'joined' => $u->joining_date,
                     'probation_ends' => $u->probation_period_end_date ?? null,
+                    'hire_ends' => $u->hire_end_date ?? null,
                     'reports_to' => $manager ? ['id' => (int) $manager->id, 'name' => $manager->name] : null,
                     'deleted' => $u->trashed() ? true : null,
                     'on_projects' => $projects->map(fn ($p) => ['id' => (int) $p->id, 'name' => $p->project_name, 'status' => $p->status])->all(),

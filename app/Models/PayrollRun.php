@@ -94,14 +94,19 @@ class PayrollRun extends Model
      */
     public function recalculate(bool $save = true): self
     {
-        $slips = $this->payslips()->get(['status', 'gross_amount', 'total_deductions', 'net_amount']);
+        $slips = $this->payslips()->get(['status', 'currency', 'gross_amount', 'total_deductions', 'net_amount']);
 
         $counted = $slips->whereNotIn('status', ['Skipped']);
 
+        // The money totals are in the run's own currency (PKR). Slips in another currency (e.g. USD salaries) are
+        // counted as people but never added into the PKR figures; attachMoney() reports them separately.
+        $runCurrency = $this->currency ?: 'PKR';
+        $base = $counted->filter(fn ($s) => ($s->currency ?: 'PKR') === $runCurrency);
+
         $this->employee_count    = $counted->count();
-        $this->total_gross       = (float) $counted->sum('gross_amount');
-        $this->total_deductions  = (float) $counted->sum('total_deductions');
-        $this->total_net         = (float) $counted->sum('net_amount');
+        $this->total_gross       = (float) $base->sum('gross_amount');
+        $this->total_deductions  = (float) $base->sum('total_deductions');
+        $this->total_net         = (float) $base->sum('net_amount');
         $this->paid_count        = $counted->where('status', 'Paid')->count();
 
         $awaiting = $counted->whereNotIn('status', ['Paid', 'On Hold'])->count();
@@ -142,23 +147,51 @@ class PayrollRun extends Model
             ->whereIn('payroll_run_id', $ids)
             ->selectRaw(
                 "payroll_run_id,
+                 currency,
                  SUM(CASE WHEN status = 'Paid' THEN net_amount ELSE 0 END) AS paid_amount,
                  SUM(CASE WHEN status IN ('Pending','Approved') THEN net_amount ELSE 0 END) AS outstanding_amount,
+                 SUM(CASE WHEN status NOT IN ('Skipped') THEN net_amount ELSE 0 END) AS net_amount_sum,
+                 SUM(CASE WHEN status NOT IN ('Skipped') THEN 1 ELSE 0 END) AS slip_count,
                  SUM(CASE WHEN status = 'On Hold' THEN net_amount ELSE 0 END) AS held_amount,
                  SUM(CASE WHEN status = 'On Hold' THEN 1 ELSE 0 END) AS held_count,
                  SUM(CASE WHEN status = 'Skipped' THEN 1 ELSE 0 END) AS skipped_count"
             )
-            ->groupBy('payroll_run_id')
+            ->groupBy('payroll_run_id', 'currency')
             ->get()
-            ->keyBy('payroll_run_id');
+            ->groupBy('payroll_run_id');
 
         foreach ($runs as $run) {
-            $r = $rows->get($run->id);
-            $run->setAttribute('paid_amount', round((float) ($r->paid_amount ?? 0), 2));
-            $run->setAttribute('outstanding_amount', round((float) ($r->outstanding_amount ?? 0), 2));
-            $run->setAttribute('held_amount', round((float) ($r->held_amount ?? 0), 2));
-            $run->setAttribute('held_count', (int) ($r->held_count ?? 0));
-            $run->setAttribute('skipped_count', (int) ($r->skipped_count ?? 0));
+            $runCurrency = $run->currency ?: 'PKR';
+            $paid = $outstanding = $held = 0.0;
+            $heldCount = $skipped = 0;
+            $other = [];
+
+            foreach ($rows->get($run->id, collect()) as $r) {
+                $cur = $r->currency ?: 'PKR';
+                $heldCount += (int) $r->held_count;
+                $skipped += (int) $r->skipped_count;
+
+                if ($cur === $runCurrency) {
+                    $paid += (float) $r->paid_amount;
+                    $outstanding += (float) $r->outstanding_amount;
+                    $held += (float) $r->held_amount;
+                } elseif ((int) $r->slip_count > 0) {
+                    $other[$cur] = [
+                        'currency'    => $cur,
+                        'count'       => (int) $r->slip_count,
+                        'net'         => round((float) $r->net_amount_sum, 2),
+                        'paid'        => round((float) $r->paid_amount, 2),
+                        'outstanding' => round((float) $r->outstanding_amount, 2),
+                    ];
+                }
+            }
+
+            $run->setAttribute('paid_amount', round($paid, 2));
+            $run->setAttribute('outstanding_amount', round($outstanding, 2));
+            $run->setAttribute('held_amount', round($held, 2));
+            $run->setAttribute('held_count', $heldCount);
+            $run->setAttribute('skipped_count', $skipped);
+            $run->setAttribute('other_currencies', array_values($other));
         }
     }
 }

@@ -14,6 +14,13 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use App\Models\WorkSession;
 
+use App\Traits\AnnotatesTaskUrgency;
+
+use App\Models\TaskAssignee;
+use App\Models\ProjectAssignee;
+use App\Models\Project;
+use App\Services\OneDriveService;
+
 class ProjectTaskController extends Controller
 {
     use CalculatesIdleTime, ResolvesTaskTree;
@@ -272,4 +279,150 @@ class ProjectTaskController extends Controller
         
         return sprintf('%dh %dm', $hours, $minutes);
     }
+
+    public function store(Request $request)
+    {
+        //return response()->json($request->all());
+        $request->validate([
+            'project_id' => 'required|exists:projects,id',
+            'task_title' => 'required|string|max:255',
+            'task_status' => 'nullable|string',
+            'priority' => 'nullable|string',
+            'due_date' => 'nullable|date',
+            'parent_task_id' => 'nullable|exists:project_tasks,id',
+            'attachments.*' => 'nullable|file|max:10240',
+
+            // New
+            'employee_ids' => 'nullable|array',
+            'employee_ids.*' => 'exists:users,id',
+        ]);
+
+        // Customer writes must stay within their own jobs, including when a
+        // caller supplies a parent task directly rather than using the UI.
+        if ((int) auth()->user()->user_role === 4) {
+            Project::where('customer_id', auth()->id())->findOrFail($request->project_id);
+        } else {
+            // Keep the existing approved customer-team creation flow scoped too.
+            $customerIds = \App\Models\CustomerTeam::where('email', auth()->user()->email)
+                ->where('status', 'Approved')->pluck('customer_id');
+            Project::whereIn('customer_id', $customerIds)->findOrFail($request->project_id);
+        }
+
+        if ($request->filled('parent_task_id')) {
+            ProjectTask::where('project_id', $request->project_id)->findOrFail($request->parent_task_id);
+        }
+
+        $task = ProjectTask::create([
+            'project_id' => $request->project_id,
+            'parent_task_id' => $request->parent_task_id,
+            'created_by' => auth()->id(),
+            'task_title' => $request->task_title,
+            'task_description' => $request->task_description,
+            'task_status' => $request->task_status ?? 'Backlog',
+            'priority' => $request->priority ?? 'Normal',
+            'due_date' => $request->due_date,
+        ]);
+
+
+        if ($request->task_status == "Backlog") {
+            // Update project status
+            $project_data = Project::find($request->project_id);
+            if ($project_data) {
+                $project_data->status = "Backlog";
+                $project_data->update();
+            }
+
+            // ✅ Also update parent task status if subtask belongs to a parent
+            if (!empty($request->parent_task_id)) {
+                $parentTask = ProjectTask::find($request->parent_task_id);
+                if ($parentTask) {
+                    $parentTask->task_status = "Backlog";
+                    $parentTask->update();
+                }
+            }
+        }
+
+        // ✅ Auto-assign the creator to the task
+        $employeeIds = $request->employee_ids ?? [];
+
+        // Always assign the creator as well
+        $employeeIds[] = auth()->id();
+
+        // Remove duplicate IDs
+        $employeeIds = array_unique($employeeIds);
+
+        foreach ($employeeIds as $employeeId) {
+            TaskAssignee::create([
+                'task_id' => $task->id,
+                'employee_id' => $employeeId,
+            ]);
+        }
+
+        if ($request->hasFile('attachments')) {
+            foreach ($request->file('attachments') as $file) {
+
+                $path = 'task_attachments/' . $task->id . '/' . uniqid() . '_' . $file->getClientOriginalName();
+
+                // Upload to OneDrive
+                app(OneDriveService::class)->upload(
+                    $path,
+                    file_get_contents($file->getRealPath())
+                );
+
+                TaskAttachment::create([
+                    'task_id'   => $task->id,
+                    'user_id'   => auth()->id(),
+                    'file_path' => $path,
+                    'file_type' => $file->getClientMimeType(),
+                    'file_size' => $file->getSize(),
+                    'file_name' => $file->getClientOriginalName(),
+                ]);
+            }
+        }
+
+
+        return response()->json(['message' => 'Task created and assigned successfully.', 'task' => $task]);
+    }
+
+    public function update(Request $request, $id)
+    {
+        $task = $this->ownedTask($id);
+
+        $request->validate([
+            'task_description' => 'nullable|string',
+            'delete_attachments' => 'nullable|array',
+            'delete_attachments.*' => 'integer',
+        ]);
+
+        // Reuse the existing task updater (files, notifications and job status).
+        // Inline edits send one field: preserve omitted values so they never
+        // look like a status/deadline change to the shared controller.
+        $request->replace(array_merge([
+            'task_status' => $task->task_status,
+            'due_date' => $task->due_date,
+        ], $request->only([
+            'task_title', 'task_description', 'task_status', 'priority',
+            'due_date', 'delete_attachments',
+        ])));
+
+        return (new \App\Http\Controllers\API\admin\ProjectTaskController())->update($request, $id);
+    }
+
+    private function ownedTask($id): ProjectTask
+    {
+        abort_unless((int) auth()->user()->user_role === 4, 403);
+
+        return ProjectTask::whereHas('project', function ($query) {
+            $query->where('customer_id', auth()->id());
+        })->findOrFail($id);
+    }
+
+    public function destroy($id)
+    {
+        $task = $this->ownedTask($id);
+        $task->delete();
+
+        return response()->json(['message' => 'Task deleted successfully.']);
+    }
+
 }

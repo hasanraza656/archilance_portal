@@ -51,3 +51,9 @@ Schedule::call(function () {
 Schedule::call(function () {
     Artisan::call('chat:email-digest');
 })->everyFiveMinutes();
+
+// Switch off the accounts of people whose offboarding day has arrived (soft delete; payroll already follows their
+// last working day). Safe to run daily: it does nothing when nobody is due.
+Schedule::call(function () {
+    Artisan::call('offboarding:process');
+})->dailyAt('00:10');

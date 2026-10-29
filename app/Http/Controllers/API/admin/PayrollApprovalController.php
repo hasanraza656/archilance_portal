@@ -48,13 +48,22 @@ class PayrollApprovalController extends Controller
 
     private function present(PayrollApprovalRequest $r): array
     {
+        // Someone who may not see executives' salaries gets the total of the payslips they CAN see, not the stored total.
+        $totalNet = (float) $r->total_net;
+        $count = $r->employee_count;
+        if (\App\Support\PayrollAccess::restricted() && $r->run) {
+            \App\Support\PayrollAccess::restrictRuns([$r->run]);
+            $totalNet = (float) $r->run->total_net;
+            $count = $r->run->employee_count;
+        }
+
         return [
             'id'            => $r->id,
             'payroll_run_id' => $r->payroll_run_id,
             'status'        => $r->status,
             'message'       => $r->message,
-            'total_net'     => (float) $r->total_net,
-            'employee_count' => $r->employee_count,
+            'total_net'     => $totalNet,
+            'employee_count' => $count,
             'requested_by'  => $r->requester ? ['id' => $r->requester->id, 'name' => $r->requester->name] : null,
             'decided_by'    => $r->decider ? ['id' => $r->decider->id, 'name' => $r->decider->name] : null,
             'decided_at'    => $r->decided_at?->toIso8601String(),

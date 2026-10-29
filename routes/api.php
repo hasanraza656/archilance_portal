@@ -82,6 +82,9 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::get('/contracts/public/{token}', [PublicContractController::class, 'show']);
 Route::post('/contracts/public/{token}/accept', [PublicContractController::class, 'accept']);
 
+// Public, NO-LOGIN experience-letter check: the page a letter's QR code opens (guarded only by the unguessable token).
+Route::get('/experience-letters/public/{token}', [\App\Http\Controllers\API\ExperienceLetterController::class, 'publicShow'])->middleware('throttle:60,1');
+
 Route::post('/slack/interactions', [SlackController::class, 'handle']);
 
 Route::post('/slack/jobs', [SlackController::class, 'jobsList']);
@@ -120,6 +123,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/contracts/{id}/status', [ContractController::class, 'updateStatus'])->whereNumber('id');
     Route::post('/contracts/{id}/resend', [ContractController::class, 'resend'])->whereNumber('id');
     Route::delete('/contracts/{id}', [ContractController::class, 'destroy'])->whereNumber('id');
+
+    // One search box for jobs + tasks (mobile app dashboard). Read-only; scoped by role inside the controller.
+    Route::get('/search', [\App\Http\Controllers\API\GlobalSearchController::class, 'index']);
+
+    // Experience letters — Admins and Executives (checked inside the controller, like Contracts above).
+    Route::get('/experience-letters/config', [\App\Http\Controllers\API\ExperienceLetterController::class, 'config']);
+    Route::get('/experience-letters/people', [\App\Http\Controllers\API\ExperienceLetterController::class, 'people']);
+    Route::get('/experience-letters/prefill/{userId}', [\App\Http\Controllers\API\ExperienceLetterController::class, 'prefill'])->whereNumber('userId');
+    Route::get('/experience-letters', [\App\Http\Controllers\API\ExperienceLetterController::class, 'index']);
+    Route::post('/experience-letters', [\App\Http\Controllers\API\ExperienceLetterController::class, 'store']);
+    Route::get('/experience-letters/{id}', [\App\Http\Controllers\API\ExperienceLetterController::class, 'show'])->whereNumber('id');
+    Route::put('/experience-letters/{id}', [\App\Http\Controllers\API\ExperienceLetterController::class, 'update'])->whereNumber('id');
+    Route::delete('/experience-letters/{id}', [\App\Http\Controllers\API\ExperienceLetterController::class, 'destroy'])->whereNumber('id');
 
     Route::post('/update-profile', [ProfileManagementController::class, 'updateProfile']);
     Route::post('/update-password', [ProfileManagementController::class, 'updatePassword']);
@@ -164,6 +180,8 @@ Route::middleware('auth:sanctum')->group(function () {
         //work session 
         Route::resource('/work-session', WorkSessionController::class);
         Route::post('/other-manual-time', [WorkSessionController::class, 'manualSession']);
+        Route::get('/work-session/{id}/proof', [App\Http\Controllers\API\WorkSessionProofController::class, 'download'])->whereNumber('id');
+        Route::get('/manual-time-limits', [App\Http\Controllers\API\WorkSessionProofController::class, 'limits']);
         //ending work session
 
         Route::resource('/project-chat', App\Http\Controllers\API\admin\ProjectChatController::class);
@@ -244,6 +262,26 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/payroll', [App\Http\Controllers\API\admin\PayrollController::class, 'index']);
         Route::get('/payroll-report', [App\Http\Controllers\API\admin\PayrollController::class, 'report']);
+        // Offboarding (admins and executives): schedule a departure, change dates, switch the account off.
+        Route::get('/offboarding', [App\Http\Controllers\API\admin\OffboardingController::class, 'index']);
+        Route::get('/offboarding/people', [App\Http\Controllers\API\admin\OffboardingController::class, 'people']);
+        Route::get('/offboarding/preview', [App\Http\Controllers\API\admin\OffboardingController::class, 'preview']);
+        Route::get('/offboarding/policy', [App\Http\Controllers\API\admin\OffboardingController::class, 'policy']);
+        Route::post('/offboarding/process-due', [App\Http\Controllers\API\admin\OffboardingController::class, 'processDue']);
+        Route::post('/offboarding', [App\Http\Controllers\API\admin\OffboardingController::class, 'store']);
+        Route::get('/offboarding/{id}', [App\Http\Controllers\API\admin\OffboardingController::class, 'show'])->whereNumber('id');
+        Route::put('/offboarding/{id}', [App\Http\Controllers\API\admin\OffboardingController::class, 'update'])->whereNumber('id');
+        Route::post('/offboarding/{id}/cancel', [App\Http\Controllers\API\admin\OffboardingController::class, 'cancel'])->whereNumber('id');
+        Route::post('/offboarding/{id}/remove-now', [App\Http\Controllers\API\admin\OffboardingController::class, 'removeNow'])->whereNumber('id');
+        Route::post('/offboarding/{id}/reinstate', [App\Http\Controllers\API\admin\OffboardingController::class, 'reinstate'])->whereNumber('id');
+        // Service providers (paid through payroll, no portal access) and the local-payout list.
+        Route::get('/payroll-payees', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'index']);
+        Route::post('/payroll-payees', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'store']);
+        Route::put('/payroll-payees/{id}', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'update'])->whereNumber('id');
+        Route::delete('/payroll-payees/{id}', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'destroy'])->whereNumber('id');
+        Route::get('/payroll/{id}/local-payouts', [App\Http\Controllers\API\admin\PayrollPayoutController::class, 'show'])->whereNumber('id');
+        Route::get('/payroll/{id}/hours-check', [App\Http\Controllers\API\admin\PayrollController::class, 'hoursCheck'])->whereNumber('id');
+        Route::post('/payroll/{id}/local-payouts', [App\Http\Controllers\API\admin\PayrollPayoutController::class, 'send'])->whereNumber('id');
         Route::post('/payroll/generate', [App\Http\Controllers\API\admin\PayrollController::class, 'generate']);
         // Payroll approval requests (executives ask, admins decide - enforced in the controller).
         Route::post('/payroll/{id}/request-approval', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'requestApproval']);
@@ -349,6 +387,8 @@ Route::middleware('auth:sanctum')->group(function () {
         //work session 
         Route::resource('/work-session', WorkSessionController::class);
         Route::post('/other-manual-time', [WorkSessionController::class, 'manualSession']);
+        Route::get('/work-session/{id}/proof', [App\Http\Controllers\API\WorkSessionProofController::class, 'download'])->whereNumber('id');
+        Route::get('/manual-time-limits', [App\Http\Controllers\API\WorkSessionProofController::class, 'limits']);
         //ending work session
 
         Route::resource('/project-chat', App\Http\Controllers\API\admin\ProjectChatController::class);
@@ -436,6 +476,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::resource('/screenshot', App\Http\Controllers\API\employee\ScreenshotController::class);
         Route::post('/manual-time', [App\Http\Controllers\API\employee\WorkSessionController::class, 'manualSession']);
         Route::post('/other-manual-time', [WorkSessionController::class, 'manualSession']);
+        Route::get('/work-session/{id}/proof', [App\Http\Controllers\API\WorkSessionProofController::class, 'download'])->whereNumber('id');
+        Route::get('/manual-time-limits', [App\Http\Controllers\API\WorkSessionProofController::class, 'limits']);
         Route::post('/stop-session', [App\Http\Controllers\API\employee\WorkSessionController::class, 'stop']);
 
         Route::post('/update-idle-time', [App\Http\Controllers\API\employee\ScreenshotController::class, 'upsertIdleTime']);
@@ -524,6 +566,26 @@ Route::middleware('auth:sanctum')->group(function () {
 
             Route::get('/payroll', [App\Http\Controllers\API\admin\PayrollController::class, 'index']);
             Route::get('/payroll-report', [App\Http\Controllers\API\admin\PayrollController::class, 'report']);
+            // Offboarding (admins and executives): schedule a departure, change dates, switch the account off.
+            Route::get('/offboarding', [App\Http\Controllers\API\admin\OffboardingController::class, 'index']);
+            Route::get('/offboarding/people', [App\Http\Controllers\API\admin\OffboardingController::class, 'people']);
+            Route::get('/offboarding/preview', [App\Http\Controllers\API\admin\OffboardingController::class, 'preview']);
+            Route::get('/offboarding/policy', [App\Http\Controllers\API\admin\OffboardingController::class, 'policy']);
+            Route::post('/offboarding/process-due', [App\Http\Controllers\API\admin\OffboardingController::class, 'processDue']);
+            Route::post('/offboarding', [App\Http\Controllers\API\admin\OffboardingController::class, 'store']);
+            Route::get('/offboarding/{id}', [App\Http\Controllers\API\admin\OffboardingController::class, 'show'])->whereNumber('id');
+            Route::put('/offboarding/{id}', [App\Http\Controllers\API\admin\OffboardingController::class, 'update'])->whereNumber('id');
+            Route::post('/offboarding/{id}/cancel', [App\Http\Controllers\API\admin\OffboardingController::class, 'cancel'])->whereNumber('id');
+            Route::post('/offboarding/{id}/remove-now', [App\Http\Controllers\API\admin\OffboardingController::class, 'removeNow'])->whereNumber('id');
+            Route::post('/offboarding/{id}/reinstate', [App\Http\Controllers\API\admin\OffboardingController::class, 'reinstate'])->whereNumber('id');
+            // Service providers (paid through payroll, no portal access) and the local-payout list.
+            Route::get('/payroll-payees', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'index']);
+            Route::post('/payroll-payees', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'store']);
+            Route::put('/payroll-payees/{id}', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'update'])->whereNumber('id');
+            Route::delete('/payroll-payees/{id}', [App\Http\Controllers\API\admin\PayrollPayeeController::class, 'destroy'])->whereNumber('id');
+            Route::get('/payroll/{id}/local-payouts', [App\Http\Controllers\API\admin\PayrollPayoutController::class, 'show'])->whereNumber('id');
+            Route::get('/payroll/{id}/hours-check', [App\Http\Controllers\API\admin\PayrollController::class, 'hoursCheck'])->whereNumber('id');
+            Route::post('/payroll/{id}/local-payouts', [App\Http\Controllers\API\admin\PayrollPayoutController::class, 'send'])->whereNumber('id');
             Route::post('/payroll/generate', [App\Http\Controllers\API\admin\PayrollController::class, 'generate']);
             // Payroll approval requests (executives ask, admins decide - enforced in the controller).
             Route::post('/payroll/{id}/request-approval', [App\Http\Controllers\API\admin\PayrollApprovalController::class, 'requestApproval']);
@@ -680,6 +742,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
         //dashboard
         Route::get('/dashboard', [App\Http\Controllers\API\DashboardController::class, 'customerStats']);
+        // Richer customer dashboard: aggregates for their own jobs only, and the Stripe subscription matched by email.
+        Route::get('/dashboard/overview', [App\Http\Controllers\API\customer\CustomerDashboardController::class, 'overview']);
+        Route::get('/dashboard/subscription', [App\Http\Controllers\API\customer\CustomerDashboardController::class, 'subscription']);
+        Route::get('/dashboard/subscription/invoices', [App\Http\Controllers\API\customer\CustomerDashboardController::class, 'subscriptionInvoices']);
 
         //customer team
         Route::resource('/customer-team', App\Http\Controllers\API\customer\CustomerTeamController::class);
@@ -735,6 +801,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 // IT team feedback (everyone inside the portal except customers; the controller enforces who).
+// "What's new" popups: which ones this person has already seen (so each shows once).
+Route::prefix('announcements')->middleware('auth:sanctum')->group(function () {
+    Route::get('/seen', [App\Http\Controllers\API\AnnouncementController::class, 'seen']);
+    Route::post('/{key}/seen', [App\Http\Controllers\API\AnnouncementController::class, 'markSeen']);
+});
+
 Route::prefix('it-feedback')->middleware('auth:sanctum')->group(function () {
     Route::get('status', [App\Http\Controllers\API\ItFeedbackController::class, 'status']);
     Route::post('skip', [App\Http\Controllers\API\ItFeedbackController::class, 'skip']);

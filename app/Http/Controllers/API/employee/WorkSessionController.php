@@ -652,6 +652,16 @@ class WorkSessionController extends Controller
 
     public function manualSession(Request $request)
     {
+        $request->validate(\App\Services\WorkSessionProof::rules());
+
+        // Upload first: if the file cannot be stored the entry is refused, so nobody believes their proof was saved.
+        try {
+            $proof = app(\App\Services\WorkSessionProof::class)->upload(\App\Services\WorkSessionProof::fileFrom($request), (int) Auth::id());
+        } catch (\Throwable $e) {
+            \Log::warning('Manual time attachment upload failed: ' . $e->getMessage());
+
+            return response()->json(['message' => 'The attachment could not be uploaded, so nothing was saved. Please try again.'], 502);
+        }
 
         $data = new WorkSession();
         $data->user_id = Auth::user()->id;
@@ -662,10 +672,13 @@ class WorkSessionController extends Controller
         $data->memo_content = $request->memo_content;
         $data->task_id = $request->task_id;
         $data->type = "Manual";
+        if ($proof) {
+            $data->forceFill($proof);
+        }
         $data->save();
 
         return response()->json([
-            'message' => 'Manual time added successfully.',
+            'message' => 'Manual time added successfully.' . ($proof ? ' Attachment saved.' : ''),
             'work_session' => $data
         ]);
 

@@ -42,6 +42,11 @@ return [
         'bot_token' => env('SLACK_BOT_TOKEN'),
     ],
 
+    'stripe' => [
+        'key' => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+    ],
+
     'onedrive' => [
         'client_id' => env('ONEDRIVE_CLIENT_ID'),
         'client_secret' => env('ONEDRIVE_CLIENT_SECRET'),

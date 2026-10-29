@@ -542,7 +542,7 @@ class ChatController extends Controller
                 'profile_pic' => $user->profile_pic,
                 'user_role' => $user->user_role,
                 'unread_count' => $unreadCount,
-                'last_message' => $lastMessage ? \Str::limit($lastMessage->message, 30, '...') : null,
+                'last_message' => $lastMessage ? $this->lastMessagePreview($lastMessage) : null,
                 'last_message_at' => $lastMessage ? $lastMessage->created_at : $user->created_at,
             ];
         });
@@ -553,6 +553,38 @@ class ChatController extends Controller
         return response()->json([
             'users' => $users
         ]);
+    }
+
+    /**
+     * Text for the "latest message" line of the people list. A message that is only a file / voice note has no text,
+     * so it used to come back empty and the app said "no message"; now it says what was sent.
+     */
+    private function lastMessagePreview(Chat $chat): string
+    {
+        $text = trim((string) $chat->message);
+        if ($text !== '') {
+            return \Str::limit($text, 30, '...');
+        }
+
+        try {
+            $type = strtolower((string) optional($chat->attachments()->first())->file_type);
+        } catch (\Throwable $e) {
+            return '';
+        }
+        if ($type === '' && !$chat->attachments()->exists()) {
+            return '';
+        }
+        if (str_contains($type, 'audio') || str_contains($type, 'voice')) {
+            return 'Voice message';
+        }
+        if (str_contains($type, 'image') || str_contains($type, 'photo')) {
+            return 'Photo';
+        }
+        if (str_contains($type, 'video')) {
+            return 'Video';
+        }
+
+        return 'Attachment';
     }
 
     public function deleteMessage($id)

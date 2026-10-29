@@ -19,9 +19,22 @@ class PayrollApprovals
     /** Where approval requests are emailed. Override with PAYROLL_APPROVER_EMAIL (comma-separated). */
     public static function approverEmails(): array
     {
-        $raw = (string) env('PAYROLL_APPROVER_EMAIL', 'ranahasanraza24@gmail.com');
+        $raw = (string) env('PAYROLL_APPROVER_EMAIL', 'faran@archilance.net');
 
         return array_values(array_filter(array_map('trim', explode(',', $raw))));
+    }
+
+    /** Where the local-payout list is emailed (the person who pays through local accounts). PAYROLL_LOCAL_PAYOUT_EMAIL, comma-separated. */
+    public static function localPayoutEmails(): array
+    {
+        $raw = (string) env('PAYROLL_LOCAL_PAYOUT_EMAIL', 'asad@archilance.net');
+
+        return array_values(array_filter(array_map('trim', explode(',', $raw))));
+    }
+
+    public static function firstNameFor(string $email): string
+    {
+        return self::nameFor($email);
     }
 
     private static function money($n): string
